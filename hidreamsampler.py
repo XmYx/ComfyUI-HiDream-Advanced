@@ -310,6 +310,12 @@ def pil2tensor(image: Image.Image):
 # --- ComfyUI Node Definition ---
 class HiDreamSampler:
     _model_cache = {}
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "generate"
+    CATEGORY = "HiDream"
+    
     @classmethod
     def cleanup_models(cls):
         """Clean up all cached models - can be called by external memory management"""
@@ -341,6 +347,18 @@ class HiDreamSampler:
         print("HiDream: Cache cleared")
         return True
         
+    @staticmethod
+    def parse_aspect_ratio(aspect_ratio_str):
+        """Parse aspect ratio string to get width and height"""
+        try:
+            # Extract dimensions from the parenthesis
+            dims_part = aspect_ratio_str.split("(")[1].split(")")[0]
+            width, height = dims_part.split("×")
+            return int(width), int(height)
+        except Exception as e:
+            print(f"Error parsing aspect ratio '{aspect_ratio_str}': {e}. Falling back to 1024x1024.")
+            return 1024, 1024
+            
     @classmethod
     def INPUT_TYPES(s):
         available_model_types = list(MODEL_CONFIGS.keys())
@@ -357,13 +375,23 @@ class HiDreamSampler:
             "Karras Exponential"
         ]
         
+        # Resolution options
+        aspect_ratio_options = [
+            "1:1 (1024×1024)",
+            "9:16 (768×1360)",
+            "16:9 (1360×768)",
+            "3:4 (880×1168)",
+            "4:3 (1168×880)",
+            "3:2 (1248×832)",
+            "2:3 (832×1248)"
+        ]
+        
         return {
             "required": {
                 "model_type": (available_model_types, {"default": default_model}),
                 "prompt": ("STRING", {"multiline": True, "default": "..."}),
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "width": ("INT", {"default": 1024, "min": 256, "max": 3096, "step": 8}),
-                "height": ("INT", {"default": 1024, "min": 256, "max": 3096, "step": 8}),
+                "aspect_ratio": (aspect_ratio_options, {"default": "1:1 (1024×1024)"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "scheduler": (scheduler_options, {"default": "Default for model"}),
                 "override_steps": ("INT", {"default": -1, "min": -1, "max": 100}),
@@ -372,29 +400,24 @@ class HiDreamSampler:
             }
         }
     
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "generate"
-    CATEGORY = "HiDream"
-    
-    # In basic node
-    def generate(self, model_type, prompt, negative_prompt, width, height, seed, scheduler, 
+    def generate(self, model_type, prompt, negative_prompt, aspect_ratio, seed, scheduler,
                  override_steps, override_cfg, use_uncensored_llm=False, **kwargs):
-        
+        # Parse resolution from aspect ratio using the static method
+        width, height = HiDreamSampler.parse_aspect_ratio(aspect_ratio)
+        print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
+        # Make dimensions divisible by 64
+        width = (width // 64) * 64
+        height = (height // 64) * 64
         # Monitor initial memory usage
         if torch.cuda.is_available():
             initial_mem = torch.cuda.memory_allocated() / 1024**2
             print(f"HiDream: Initial VRAM usage: {initial_mem:.2f} MB")
-            
         if not MODEL_CONFIGS or model_type == "error":
             print("HiDream Error: No models loaded.")
             return (torch.zeros((1, 512, 512, 3)),)
-            
         pipe = None; config = None
-        
         # Create cache key that includes uncensored state
         cache_key = f"{model_type}_{'uncensored' if use_uncensored_llm else 'standard'}"
-        
         # --- Model Loading / Caching ---
         if cache_key in self._model_cache:
             print(f"Checking cache for {cache_key}...")
@@ -407,7 +430,6 @@ class HiDreamSampler:
                 pipe, config = None, None
             if valid_cache:
                 print("Using cached model.")
-                
         if pipe is None:
             if self._model_cache:
                 print(f"Clearing ALL cache before loading {model_type}...")
@@ -436,7 +458,6 @@ class HiDreamSampler:
                     # Force synchronization
                     torch.cuda.synchronize()
                 print("Cache cleared.")
-                
             print(f"Loading model for {model_type}{' (uncensored)' if use_uncensored_llm else ''}...")
             try:
                 pipe, config = load_models(model_type, use_uncensored_llm)
@@ -447,18 +468,14 @@ class HiDreamSampler:
                 import traceback
                 traceback.print_exc()
                 return (torch.zeros((1, 512, 512, 3)),)
-                
         if pipe is None or config is None:
             print("CRITICAL ERROR: Load failed.")
             return (torch.zeros((1, 512, 512, 3)),)
-            
         # --- Update scheduler if requested ---
         original_scheduler_class = config["scheduler_class"]
         original_shift = config["shift"]
-        
         if scheduler != "Default for model":
             print(f"Replacing default scheduler ({original_scheduler_class}) with: {scheduler}")
-            
             # Create a completely fresh scheduler instance to avoid any parameter leakage
             if scheduler == "UniPC":
                 new_scheduler = FlowUniPCMultistepScheduler(num_train_timesteps=1000, shift=original_shift, use_dynamic_shifting=False)
@@ -468,15 +485,15 @@ class HiDreamSampler:
                 pipe.scheduler = new_scheduler
             elif scheduler == "Karras Euler":
                 new_scheduler = FlashFlowMatchEulerDiscreteScheduler(
-                    num_train_timesteps=1000, 
-                    shift=original_shift, 
+                    num_train_timesteps=1000,
+                    shift=original_shift,
                     use_dynamic_shifting=False,
                     use_karras_sigmas=True
                 )
                 pipe.scheduler = new_scheduler
             elif scheduler == "Karras Exponential":
                 new_scheduler = FlashFlowMatchEulerDiscreteScheduler(
-                    num_train_timesteps=1000, 
+                    num_train_timesteps=1000,
                     shift=original_shift,
                     use_dynamic_shifting=False,
                     use_exponential_sigmas=True
@@ -486,30 +503,33 @@ class HiDreamSampler:
             # Ensure we're using the original scheduler as specified in the model config
             print(f"Using model's default scheduler: {original_scheduler_class}")
             pipe.scheduler = get_scheduler_instance(original_scheduler_class, original_shift)
-                
         # --- Generation Setup ---
         is_nf4_current = config.get("is_nf4", False)
         num_inference_steps = override_steps if override_steps >= 0 else config["num_inference_steps"]
         guidance_scale = override_cfg if override_cfg >= 0.0 else config["guidance_scale"]
+        # Create the progress bar
         pbar = comfy.utils.ProgressBar(num_inference_steps)
-        
-        # Define hardcoded sequence lengths BEFORE using them
+        # Set default max sequence lengths
         max_length_clip_l = 77
         max_length_openclip = 150
         max_length_t5 = 256
         max_length_llama = 256
-        
+
+        # Set default encoder weights
+        clip_l_weight = 1.0
+        openclip_weight = 1.0
+        t5_weight = 1.0
+        llama_weight = 1.0
+                     
         try:
             inference_device = comfy.model_management.get_torch_device()
         except Exception:
             inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            
         print(f"Creating Generator on: {inference_device}")
         generator = torch.Generator(device=inference_device).manual_seed(seed)
         print(f"\n--- Starting Generation ---")
         print(f"Model: {model_type}{' (uncensored)' if use_uncensored_llm else ''}, Res: {height}x{width}, Steps: {num_inference_steps}, CFG: {guidance_scale}, Seed: {seed}")
         print(f"Using standard sequence lengths: CLIP-L: {max_length_clip_l}, OpenCLIP: {max_length_openclip}, T5: {max_length_t5}, Llama: {max_length_llama}")
-        
         # --- Run Inference ---
         output_images = None
         try:
@@ -518,12 +538,14 @@ class HiDreamSampler:
                 pipe.to(inference_device)
             else:
                 print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
-                
             print("Executing pipeline inference...")
-            
+            # Call pipeline with individual sequence lengths
             with torch.inference_mode():
                 output_images = pipe(
-                    prompt=prompt,
+                    prompt=prompt,           # CLIP-L 
+                    prompt_2=prompt,         # OpenCLIP - explicitly send same prompt
+                    prompt_3=prompt,         # T5 - explicitly send same prompt
+                    prompt_4=prompt,         # LLM - explicitly send same prompt
                     negative_prompt=negative_prompt.strip() if negative_prompt else None,
                     height=height,
                     width=width,
@@ -531,11 +553,14 @@ class HiDreamSampler:
                     num_inference_steps=num_inference_steps,
                     num_images_per_prompt=1,
                     generator=generator,
-                    max_sequence_length=128,  # Default fallback
                     max_sequence_length_clip_l=max_length_clip_l,
                     max_sequence_length_openclip=max_length_openclip,
                     max_sequence_length_t5=max_length_t5,
                     max_sequence_length_llama=max_length_llama,
+                    clip_l_scale=clip_l_weight,
+                    openclip_scale=openclip_weight,
+                    t5_scale=t5_weight,
+                    llama_scale=llama_weight,
                 ).images
             print("Pipeline inference finished.")
         except Exception as e:
@@ -545,7 +570,6 @@ class HiDreamSampler:
             return (torch.zeros((1, height, width, 3)),)
         finally:
             pbar.update_absolute(num_inference_steps) # Update pbar regardless
-            
         print("--- Generation Complete ---")
         
         # Robust output handling
@@ -594,8 +618,13 @@ class HiDreamSampler:
 
 # --- ComfyUI Node 2 Definition ---
 class HiDreamSamplerAdvanced:
-    _model_cache = HiDreamSampler._model_cache  # Share model cache with basic node
-    cleanup_models = HiDreamSampler.cleanup_models  # Share cleanup method
+    _model_cache = HiDreamSampler._model_cache
+    cleanup_models = HiDreamSampler.cleanup_models
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "generate"
+    CATEGORY = "HiDream"
     
     @classmethod
     def INPUT_TYPES(s):
@@ -604,6 +633,7 @@ class HiDreamSamplerAdvanced:
             return {"required": {"error": ("STRING", {"default": "No models available...", "multiline": True})}}
         default_model = "fast-nf4" if "fast-nf4" in available_model_types else "fast" if "fast" in available_model_types else available_model_types[0]
         
+        # Define schedulers
         scheduler_options = [
             "Default for model",
             "UniPC",
@@ -612,13 +642,24 @@ class HiDreamSamplerAdvanced:
             "Karras Exponential"
         ]
         
+        # Resolution options
+        aspect_ratio_options = [
+            "1:1 (Square Reso)",
+            "9:16 (768×1360)",
+            "16:9 (1360×768)",
+            "3:4 (880×1168)",
+            "4:3 (1168×880)",
+            "3:2 (1248×832)",
+            "2:3 (832×1248)",
+            "Custom"
+        ]
+        
         return {
             "required": {
                 "model_type": (available_model_types, {"default": default_model}),
                 "primary_prompt": ("STRING", {"multiline": True, "default": "..."}),
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "width": ("INT", {"default": 1024, "min": 512, "max": 2048, "step": 8}),
-                "height": ("INT", {"default": 1024, "min": 512, "max": 2048, "step": 8}),
+                "aspect_ratio": (aspect_ratio_options, {"default": "1:1 (Square Reso)"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "scheduler": (scheduler_options, {"default": "Default for model"}),
                 "override_steps": ("INT", {"default": -1, "min": -1, "max": 100}),
@@ -630,6 +671,17 @@ class HiDreamSamplerAdvanced:
                 "openclip_prompt": ("STRING", {"multiline": True, "default": ""}),
                 "t5_prompt": ("STRING", {"multiline": True, "default": ""}),
                 "llama_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "llm_system_prompt": ("STRING", {
+                    "multiline": True, 
+                    "default": "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions."
+                }),
+                "clip_l_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "openclip_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "t5_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "llama_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "square_resolution": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),
+                "custom_width": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),
+                "custom_height": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),
                 "max_length_clip_l": ("INT", {"default": 77, "min": 64, "max": 218}),
                 "max_length_openclip": ("INT", {"default": 77, "min": 64, "max": 218}),
                 "max_length_t5": ("INT", {"default": 128, "min": 64, "max": 512}),
@@ -637,17 +689,42 @@ class HiDreamSamplerAdvanced:
             }
         }
     
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "generate"
-    CATEGORY = "HiDream"
+    @staticmethod
+    def parse_dimensions(aspect_ratio_str):
+        """Parse dimensions from a string like '9:16 (768×1360)'"""
+        try:
+            if "Square Reso" in aspect_ratio_str:
+                return 1024, 1024  # Default if parsing fails
+            dims_part = aspect_ratio_str.split("(")[1].split(")")[0]
+            width, height = dims_part.split("×")
+            return int(width), int(height)
+        except Exception as e:
+            print(f"Error parsing aspect ratio '{aspect_ratio_str}': {e}. Falling back to 1024x1024.")
+            return 1024, 1024
     
-    def generate(self, model_type, primary_prompt, negative_prompt, width, height, seed, scheduler, 
+    def generate(self, model_type, primary_prompt, negative_prompt, aspect_ratio, seed, scheduler,
                  override_steps, override_cfg, use_uncensored_llm=False,
                  clip_l_prompt="", openclip_prompt="", t5_prompt="", llama_prompt="",
-                 max_length_clip_l=77, max_length_openclip=77, max_length_t5=128, max_length_llama=128, **kwargs):
-        print("DEBUG: Advanced node generate() called")
-                     
+                 llm_system_prompt="You are a creative AI assistant...",
+                 square_resolution=1024, custom_width=1024, custom_height=1024,
+                 max_length_clip_l=77, max_length_openclip=77, max_length_t5=128, max_length_llama=128,
+                 clip_l_weight=1.0, openclip_weight=1.0, t5_weight=1.0, llama_weight=1.0, **kwargs):
+        
+        # Get width and height based on aspect ratio
+        if "Square Reso" in aspect_ratio:
+            width, height = square_resolution, square_resolution
+            print(f"Using square resolution: {width}×{height}")
+        elif aspect_ratio == "Custom":
+            width, height = custom_width, custom_height
+            print(f"Using custom resolution: {width}×{height}")
+        else:
+            width, height = self.parse_dimensions(aspect_ratio)
+            print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
+        
+        # Make width and height divisible by 64
+        width = (width // 64) * 64
+        height = (height // 64) * 64
+        
         # Monitor initial memory usage
         if torch.cuda.is_available():
             initial_mem = torch.cuda.memory_allocated() / 1024**2
@@ -781,6 +858,10 @@ class HiDreamSamplerAdvanced:
                 print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
                 
             print("Executing pipeline inference...")
+            # Make width and height divisible by 64
+            width = (width // 64) * 64
+            height = (height // 64) * 64
+            
             # Use specific prompts for each encoder, falling back to primary prompt if empty
             prompt_clip_l = clip_l_prompt.strip() if clip_l_prompt.strip() else primary_prompt
             prompt_openclip = openclip_prompt.strip() if openclip_prompt.strip() else primary_prompt
@@ -792,8 +873,26 @@ class HiDreamSamplerAdvanced:
             print(f"  OpenCLIP ({max_length_openclip} tokens): {prompt_openclip[:50]}{'...' if len(prompt_openclip) > 50 else ''}")
             print(f"  T5 ({max_length_t5} tokens): {prompt_t5[:50]}{'...' if len(prompt_t5) > 50 else ''}")
             print(f"  Llama ({max_length_llama} tokens): {prompt_llama[:50]}{'...' if len(prompt_llama) > 50 else ''}")
+
+                        
+            # Replace truly blank inputs with minimal period
+            if not prompt_clip_l.strip():
+                prompt_clip_l = "."
+                
+            if not prompt_openclip.strip():
+                prompt_openclip = "."
+                
+            if not prompt_t5.strip():
+                prompt_t5 = "."
+                
+            # Custom system prompt for blank LLM prompts to try to prevent LLM output noise
+            custom_system_prompt = llm_system_prompt
+            if not prompt_llama.strip():
+                prompt_llama = "."
+                custom_system_prompt = "You will only output a single period as your output '.'\nDo not add any other acknowledgement or extra text or data."
+
             
-            # Call pipeline with encoder-specific prompts
+            # Call pipeline with encoder-specific prompts and system prompt
             with torch.inference_mode():
                 output_images = pipe(
                     prompt=prompt_clip_l,         # CLIP-L specific prompt
@@ -811,6 +910,11 @@ class HiDreamSamplerAdvanced:
                     max_sequence_length_openclip=max_length_openclip,
                     max_sequence_length_t5=max_length_t5,
                     max_sequence_length_llama=max_length_llama,
+                    llm_system_prompt=custom_system_prompt,
+                    clip_l_scale=clip_l_weight,
+                    openclip_scale=openclip_weight,
+                    t5_scale=t5_weight,
+                    llama_scale=llama_weight,
                 ).images
             print("Pipeline inference finished.")
         except Exception as e:

@@ -317,6 +317,7 @@ class HiDreamSampler:
     FUNCTION = "generate"
     CATEGORY = "HiDream"
     
+    @classmethod
     def cleanup_models(cls):
         """Clean up all cached models - can be called by external memory management"""
         print("HiDream: Cleaning up all cached models...")
@@ -347,6 +348,18 @@ class HiDreamSampler:
         print("HiDream: Cache cleared")
         return True
         
+    @staticmethod
+    def parse_aspect_ratio(aspect_ratio_str):
+        """Parse aspect ratio string to get width and height"""
+        try:
+            # Extract dimensions from the parenthesis
+            dims_part = aspect_ratio_str.split("(")[1].split(")")[0]
+            width, height = dims_part.split("×")
+            return int(width), int(height)
+        except Exception as e:
+            print(f"Error parsing aspect ratio '{aspect_ratio_str}': {e}. Falling back to 1024x1024.")
+            return 1024, 1024
+            
     @classmethod
     def INPUT_TYPES(s):
         available_model_types = list(MODEL_CONFIGS.keys())
@@ -388,6 +401,7 @@ class HiDreamSampler:
             }
         }
     
+    @staticmethod
     def parse_aspect_ratio(aspect_ratio_str):
         """Parse aspect ratio string to get width and height"""
         try:
@@ -402,8 +416,8 @@ class HiDreamSampler:
     def generate(self, model_type, prompt, negative_prompt, aspect_ratio, seed, scheduler, 
                  override_steps, override_cfg, use_uncensored_llm=False, **kwargs):
         
-        # Parse resolution from aspect ratio
-        width, height = self.parse_aspect_ratio(aspect_ratio)
+        # Parse resolution from aspect ratio using the static method
+        width, height = HiDreamSampler.parse_aspect_ratio(aspect_ratio)
         print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
         
         # Monitor initial memory usage
@@ -619,9 +633,10 @@ class HiDreamSampler:
 
 # --- ComfyUI Node 2 Definition ---
 class HiDreamSamplerAdvanced:
-    _model_cache = HiDreamSampler._model_cache  # Share model cache with basic node
-    cleanup_models = HiDreamSampler.cleanup_models  # Share cleanup method
+    _model_cache = HiDreamSampler._model_cache
+    cleanup_models = HiDreamSampler.cleanup_models
     
+    # These need to be defined as class attributes
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "generate"
@@ -645,13 +660,13 @@ class HiDreamSamplerAdvanced:
         
         # Resolution options
         aspect_ratio_options = [
-            "1:1 (Square)",
-            "9:16 (Portrait)",
-            "16:9 (Landscape)",
-            "3:4 (Portrait)",
-            "4:3 (Landscape)",
-            "3:2 (Landscape)",
-            "2:3 (Portrait)",
+            "1:1 Square Reso",
+            "9:16 (768×1360)",
+            "16:9 (1360×768)",
+            "3:4 (880×1168)",
+            "4:3 (1168×880)",
+            "3:2 (1248×832)",
+            "2:3 (832×1248)",
             "Custom"
         ]
         
@@ -660,7 +675,7 @@ class HiDreamSamplerAdvanced:
                 "model_type": (available_model_types, {"default": default_model}),
                 "primary_prompt": ("STRING", {"multiline": True, "default": "..."}),
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "aspect_ratio": (aspect_ratio_options, {"default": "1:1 (Square)"}),
+                "aspect_ratio": (aspect_ratio_options, {"default": "1:1 Square Reso"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "scheduler": (scheduler_options, {"default": "Default for model"}),
                 "override_steps": ("INT", {"default": -1, "min": -1, "max": 100}),
@@ -686,34 +701,16 @@ class HiDreamSamplerAdvanced:
             }
         }
     
-    def get_resolution(self, aspect_ratio, square_resolution=1024, custom_width=1024, custom_height=1024):
-        """Determine resolution based on aspect ratio and optional parameters"""
-        if aspect_ratio == "1:1 (Square)":
-            # Use the square_resolution parameter for both dimensions
-            return square_resolution, square_resolution
-        elif aspect_ratio == "Custom":
-            # Use custom width and height
-            return custom_width, custom_height
-        elif aspect_ratio == "9:16 (Portrait)":
-            base_width, base_height = 768, 1360
-        elif aspect_ratio == "16:9 (Landscape)":
-            base_width, base_height = 1360, 768
-        elif aspect_ratio == "3:4 (Portrait)":
-            base_width, base_height = 880, 1168
-        elif aspect_ratio == "4:3 (Landscape)":
-            base_width, base_height = 1168, 880
-        elif aspect_ratio == "3:2 (Landscape)":
-            base_width, base_height = 1248, 832
-        elif aspect_ratio == "2:3 (Portrait)":
-            base_width, base_height = 832, 1248
-        else:
-            # Default to square 1024x1024
+    @staticmethod
+    def parse_dimensions(aspect_ratio_str):
+        """Parse dimensions from a string like '9:16 (768×1360)'"""
+        try:
+            dims_part = aspect_ratio_str.split("(")[1].split(")")[0]
+            width, height = dims_part.split("×")
+            return int(width), int(height)
+        except Exception as e:
+            print(f"Error parsing aspect ratio '{aspect_ratio_str}': {e}. Falling back to 1024x1024.")
             return 1024, 1024
-            
-        # Ensure dimensions are divisible by 64
-        width = (base_width // 64) * 64
-        height = (base_height // 64) * 64
-        return width, height
     
     def generate(self, model_type, primary_prompt, negative_prompt, aspect_ratio, seed, scheduler, 
                  override_steps, override_cfg, use_uncensored_llm=False,
@@ -722,9 +719,16 @@ class HiDreamSamplerAdvanced:
                  square_resolution=1024, custom_width=1024, custom_height=1024,
                  max_length_clip_l=77, max_length_openclip=77, max_length_t5=128, max_length_llama=128, **kwargs):
         
-        # Get width and height based on aspect ratio and other parameters
-        width, height = self.get_resolution(aspect_ratio, square_resolution, custom_width, custom_height)
-        print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
+        # Get width and height based on aspect ratio
+        if aspect_ratio == "1:1 Square Reso":
+            width, height = square_resolution, square_resolution
+            print(f"Using square resolution: {width}×{height}")
+        elif aspect_ratio == "Custom":
+            width, height = custom_width, custom_height
+            print(f"Using custom resolution: {width}×{height}")
+        else:
+            width, height = self.parse_dimensions(aspect_ratio)
+            print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
                      
         # Monitor initial memory usage
         if torch.cuda.is_available():
@@ -859,6 +863,10 @@ class HiDreamSamplerAdvanced:
                 print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
                 
             print("Executing pipeline inference...")
+            # Make width and height divisible by 64
+            width = (width // 64) * 64
+            height = (height // 64) * 64
+            
             # Use specific prompts for each encoder, falling back to primary prompt if empty
             prompt_clip_l = clip_l_prompt.strip() if clip_l_prompt.strip() else primary_prompt
             prompt_openclip = openclip_prompt.strip() if openclip_prompt.strip() else primary_prompt

@@ -396,6 +396,10 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         max_sequence_length_t5: Optional[int] = None,
         max_sequence_length_llama: Optional[int] = None,
         llm_system_prompt: str = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        clip_l_scale: float = 1.0,
+        openclip_scale: float = 1.0,
+        t5_scale: float = 1.0,
+        llama_scale: float = 1.0,
     ):
         device = device or self._execution_device
         # Set defaults for individual encoders if not specified
@@ -434,6 +438,10 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 dtype = dtype,
             )
 
+            # Apply clip scaling factors
+            pooled_prompt_embeds_1 = pooled_prompt_embeds_1 * clip_l_scale
+            pooled_prompt_embeds_2 = pooled_prompt_embeds_2 * openclip_scale
+            
             pooled_prompt_embeds = torch.cat([pooled_prompt_embeds_1, pooled_prompt_embeds_2], dim=-1)
 
             # Get T5 embeddings
@@ -453,6 +461,11 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 device = device,
                 dtype = dtype
             )
+
+            # Apply T5 and LLM scaling factors
+            t5_prompt_embeds = t5_prompt_embeds * t5_scale
+            llama3_prompt_embeds = llama3_prompt_embeds * llama_scale
+            
             prompt_embeds = [t5_prompt_embeds, llama3_prompt_embeds]
 
         return prompt_embeds, pooled_prompt_embeds
@@ -566,6 +579,10 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         max_sequence_length_t5: Optional[int] = None,
         max_sequence_length_llama: Optional[int] = None,
         llm_system_prompt: str = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        clip_l_scale: float = 1.0,
+        openclip_scale: float = 1.0,
+        t5_scale: float = 1.0,
+        llama_scale: float = 1.0,
     ):
         # disable scaling entirely
         height = height or self.default_sample_size * self.vae_scale_factor

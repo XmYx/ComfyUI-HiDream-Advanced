@@ -310,7 +310,13 @@ def pil2tensor(image: Image.Image):
 # --- ComfyUI Node Definition ---
 class HiDreamSampler:
     _model_cache = {}
-    @classmethod
+    
+    # These need to be defined as class attributes
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "generate"
+    CATEGORY = "HiDream"
+    
     def cleanup_models(cls):
         """Clean up all cached models - can be called by external memory management"""
         print("HiDream: Cleaning up all cached models...")
@@ -615,6 +621,11 @@ class HiDreamSampler:
 class HiDreamSamplerAdvanced:
     _model_cache = HiDreamSampler._model_cache  # Share model cache with basic node
     cleanup_models = HiDreamSampler.cleanup_models  # Share cleanup method
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "generate"
+    CATEGORY = "HiDream"
     
     @classmethod
     def INPUT_TYPES(s):

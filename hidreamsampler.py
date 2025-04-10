@@ -311,7 +311,6 @@ def pil2tensor(image: Image.Image):
 class HiDreamSampler:
     _model_cache = {}
     
-    # These need to be defined as class attributes
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "generate"
@@ -401,24 +400,16 @@ class HiDreamSampler:
             }
         }
     
-    @staticmethod
-    def parse_aspect_ratio(aspect_ratio_str):
-        """Parse aspect ratio string to get width and height"""
-        try:
-            # Extract dimensions from the parenthesis
-            dims_part = aspect_ratio_str.split("(")[1].split(")")[0]
-            width, height = dims_part.split("×")
-            return int(width), int(height)
-        except Exception as e:
-            print(f"Error parsing aspect ratio '{aspect_ratio_str}': {e}. Falling back to 1024x1024.")
-            return 1024, 1024
-    
     def generate(self, model_type, prompt, negative_prompt, aspect_ratio, seed, scheduler, 
                  override_steps, override_cfg, use_uncensored_llm=False, **kwargs):
         
         # Parse resolution from aspect ratio using the static method
         width, height = HiDreamSampler.parse_aspect_ratio(aspect_ratio)
         print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
+        
+        # Make dimensions divisible by 64
+        width = (width // 64) * 64
+        height = (height // 64) * 64
         
         # Monitor initial memory usage
         if torch.cuda.is_available():
@@ -530,9 +521,8 @@ class HiDreamSampler:
         is_nf4_current = config.get("is_nf4", False)
         num_inference_steps = override_steps if override_steps >= 0 else config["num_inference_steps"]
         guidance_scale = override_cfg if override_cfg >= 0.0 else config["guidance_scale"]
-        pbar = comfy.utils.ProgressBar(num_inference_steps)
         
-        # Define hardcoded sequence lengths BEFORE using them
+        # Set default max sequence lengths
         max_length_clip_l = 77
         max_length_openclip = 150
         max_length_t5 = 256
@@ -560,6 +550,7 @@ class HiDreamSampler:
                 
             print("Executing pipeline inference...")
             
+            # Call pipeline with individual sequence lengths
             with torch.inference_mode():
                 output_images = pipe(
                     prompt=prompt,
@@ -636,7 +627,6 @@ class HiDreamSamplerAdvanced:
     _model_cache = HiDreamSampler._model_cache
     cleanup_models = HiDreamSampler.cleanup_models
     
-    # These need to be defined as class attributes
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "generate"
@@ -660,7 +650,7 @@ class HiDreamSamplerAdvanced:
         
         # Resolution options
         aspect_ratio_options = [
-            "1:1 Square Reso",
+            "1:1 (Square Reso)",
             "9:16 (768×1360)",
             "16:9 (1360×768)",
             "3:4 (880×1168)",
@@ -675,7 +665,7 @@ class HiDreamSamplerAdvanced:
                 "model_type": (available_model_types, {"default": default_model}),
                 "primary_prompt": ("STRING", {"multiline": True, "default": "..."}),
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "aspect_ratio": (aspect_ratio_options, {"default": "1:1 Square Reso"}),
+                "aspect_ratio": (aspect_ratio_options, {"default": "1:1 (Square Reso)"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "scheduler": (scheduler_options, {"default": "Default for model"}),
                 "override_steps": ("INT", {"default": -1, "min": -1, "max": 100}),
@@ -705,6 +695,8 @@ class HiDreamSamplerAdvanced:
     def parse_dimensions(aspect_ratio_str):
         """Parse dimensions from a string like '9:16 (768×1360)'"""
         try:
+            if "Square Reso" in aspect_ratio_str:
+                return 1024, 1024  # Default if parsing fails
             dims_part = aspect_ratio_str.split("(")[1].split(")")[0]
             width, height = dims_part.split("×")
             return int(width), int(height)
@@ -720,7 +712,7 @@ class HiDreamSamplerAdvanced:
                  max_length_clip_l=77, max_length_openclip=77, max_length_t5=128, max_length_llama=128, **kwargs):
         
         # Get width and height based on aspect ratio
-        if aspect_ratio == "1:1 Square Reso":
+        if "Square Reso" in aspect_ratio:
             width, height = square_resolution, square_resolution
             print(f"Using square resolution: {width}×{height}")
         elif aspect_ratio == "Custom":
@@ -729,7 +721,11 @@ class HiDreamSamplerAdvanced:
         else:
             width, height = self.parse_dimensions(aspect_ratio)
             print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
-                     
+        
+        # Make width and height divisible by 64
+        width = (width // 64) * 64
+        height = (height // 64) * 64
+        
         # Monitor initial memory usage
         if torch.cuda.is_available():
             initial_mem = torch.cuda.memory_allocated() / 1024**2
@@ -878,7 +874,6 @@ class HiDreamSamplerAdvanced:
             print(f"  OpenCLIP ({max_length_openclip} tokens): {prompt_openclip[:50]}{'...' if len(prompt_openclip) > 50 else ''}")
             print(f"  T5 ({max_length_t5} tokens): {prompt_t5[:50]}{'...' if len(prompt_t5) > 50 else ''}")
             print(f"  Llama ({max_length_llama} tokens): {prompt_llama[:50]}{'...' if len(prompt_llama) > 50 else ''}")
-            print(f"  LLM System Prompt: {llm_system_prompt[:50]}{'...' if len(llm_system_prompt) > 50 else ''}")
             
             # Call pipeline with encoder-specific prompts and system prompt
             with torch.inference_mode():

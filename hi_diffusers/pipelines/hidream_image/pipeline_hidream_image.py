@@ -11,7 +11,6 @@ from transformers import (
     LlamaForCausalLM,
     PreTrainedTokenizerFast
 )
-
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.loaders import FromSingleFileMixin
 from diffusers.models.autoencoders import AutoencoderKL
@@ -29,7 +28,6 @@ from ...schedulers.fm_solvers_unipc import FlowUniPCMultistepScheduler
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
-
     XLA_AVAILABLE = True
 else:
     XLA_AVAILABLE = False
@@ -61,22 +59,20 @@ def retrieve_timesteps(
     r"""
     Calls the scheduler's `set_timesteps` method and retrieves timesteps from the scheduler after the call. Handles
     custom timesteps. Any kwargs will be supplied to `scheduler.set_timesteps`.
-
     Args:
         scheduler (`SchedulerMixin`):
             The scheduler to get timesteps from.
         num_inference_steps (`int`):
             The number of diffusion steps used when generating samples with a pre-trained model. If used, `timesteps`
             must be `None`.
-        device (`str` or `torch.device`, *optional*):
+        device (`str` or `torch.device`, _optional_):
             The device to which the timesteps should be moved to. If `None`, the timesteps are not moved.
-        timesteps (`List[int]`, *optional*):
+        timesteps (`List[int]`, _optional_):
             Custom timesteps used to override the timestep spacing strategy of the scheduler. If `timesteps` is passed,
             `num_inference_steps` and `sigmas` must be `None`.
-        sigmas (`List[float]`, *optional*):
+        sigmas (`List[float]`, _optional_):
             Custom sigmas used to override the timestep spacing strategy of the scheduler. If `sigmas` is passed,
             `num_inference_steps` and `timesteps` must be `None`.
-
     Returns:
         `Tuple[torch.Tensor, int]`: A tuple where the first element is the timestep schedule from the scheduler and the
         second element is the number of inference steps.
@@ -112,7 +108,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
     model_cpu_offload_seq = "text_encoder->text_encoder_2->text_encoder_3->text_encoder_4->image_encoder->transformer->vae"
     _optional_components = ["image_encoder", "feature_extractor"]
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
-
+    
     def __init__(
         self,
         scheduler: FlowMatchEulerDiscreteScheduler,
@@ -127,7 +123,6 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         tokenizer_4: PreTrainedTokenizerFast,
     ):
         super().__init__()
-
         self.register_modules(
             vae=vae,
             text_encoder=text_encoder,
@@ -148,7 +143,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
         self.default_sample_size = 128
         self.tokenizer_4.pad_token = self.tokenizer_4.eos_token
-
+    
     # --- Add zero-embedding support to _get_t5_prompt_embeds method ---
     def _get_t5_prompt_embeds(
         self,
@@ -187,18 +182,15 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         text_input_ids = text_inputs.input_ids
         attention_mask = text_inputs.attention_mask
         untruncated_ids = self.tokenizer_3(prompt, padding="longest", return_tensors="pt").input_ids
-
         if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
             removed_text = self.tokenizer_3.batch_decode(untruncated_ids[:, min(max_sequence_length, self.tokenizer_3.model_max_length) - 1 : -1])
             logger.warning(
                 "The following part of your input was truncated because `max_sequence_length` is set to "
                 f" {min(max_sequence_length, self.tokenizer_3.model_max_length)} tokens: {removed_text}"
             )
-
         prompt_embeds = self.text_encoder_3(text_input_ids.to(device), attention_mask=attention_mask.to(device))[0]
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-        _, seq_len, _ = prompt_embeds.shape
-
+        _, seq_len, _= prompt_embeds.shape
         # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
@@ -246,18 +238,14 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             truncation=True,
             return_tensors="pt",
         )
-
         text_input_ids = text_inputs.input_ids
         prompt_embeds = text_encoder(text_input_ids.to(device), output_hidden_states=True)
-
         # Use pooled output of CLIPTextModel
         prompt_embeds = prompt_embeds[0]
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-
         # duplicate text embeddings for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt)
         prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, -1)
-
         return prompt_embeds
     
     # --- Add system_prompt parameter to _get_llama3_prompt_embeds method ---
@@ -362,7 +350,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             batch_size = len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
-
+        
         # Pass all sequence length parameters to _encode_prompt
         prompt_embeds, pooled_prompt_embeds = self._encode_prompt(
             prompt = prompt,
@@ -388,7 +376,6 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             negative_prompt_2 = negative_prompt_2 or negative_prompt
             negative_prompt_3 = negative_prompt_3 or negative_prompt
             negative_prompt_4 = negative_prompt_4 or negative_prompt
-
             # normalize str to list
             negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
             negative_prompt_2 = (
@@ -400,7 +387,6 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             negative_prompt_4 = (
                 batch_size * [negative_prompt_4] if isinstance(negative_prompt_4, str) else negative_prompt_4
             )
-
             if prompt is not None and type(prompt) is not type(negative_prompt):
                 raise TypeError(
                     f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
@@ -412,7 +398,6 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                     f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
                     " the batch size of `prompt`."
                 )
-            
             negative_prompt_embeds, negative_pooled_prompt_embeds = self._encode_prompt(
                 prompt = negative_prompt,
                 prompt_2 = negative_prompt_2,
@@ -432,7 +417,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             )
         
         return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
-
+    
     # --- Update _encode_prompt to pass system_prompt ---
     def _encode_prompt(
         self,
@@ -510,6 +495,79 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         
         return prompt_embeds, pooled_prompt_embeds
     
+    def enable_vae_slicing(self):
+        r"""
+        Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
+        compute decoding in several steps. This is useful to save some memory and allow larger batch sizes.
+        """
+        self.vae.enable_slicing()
+
+    def disable_vae_slicing(self):
+        r"""
+        Disable sliced VAE decoding. If `enable_vae_slicing` was previously enabled, this method will go back to
+        computing decoding in one step.
+        """
+        self.vae.disable_slicing()
+
+    def enable_vae_tiling(self):
+        r"""
+        Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
+        compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
+        processing larger images.
+        """
+        self.vae.enable_tiling()
+
+    def disable_vae_tiling(self):
+        r"""
+        Disable tiled VAE decoding. If `enable_vae_tiling` was previously enabled, this method will go back to
+        computing decoding in one step.
+        """
+        self.vae.disable_tiling()
+
+    def prepare_latents(
+        self,
+        batch_size,
+        num_channels_latents,
+        height,
+        width,
+        dtype,
+        device,
+        generator,
+        latents=None,
+    ):
+        # VAE applies 8x compression on images but we must also account for packing which requires
+        # latent height and width to be divisible by 2.
+        height = 2 * (int(height) // (self.vae_scale_factor * 2))
+        width = 2 * (int(width) // (self.vae_scale_factor * 2))
+        shape = (batch_size, num_channels_latents, height, width)
+        if latents is None:
+            latents = randn_tensor(shape, generator=generator, device=device, dtype=dtype)
+        else:
+            if latents.shape != shape:
+                raise ValueError(f"Unexpected latents shape, got {latents.shape}, expected {shape}")
+            latents = latents.to(device)
+        return latents
+
+    @property
+    def guidance_scale(self):
+        return self._guidance_scale
+
+    @property
+    def do_classifier_free_guidance(self):
+        return self._guidance_scale > 1
+
+    @property
+    def joint_attention_kwargs(self):
+        return self._joint_attention_kwargs
+
+    @property
+    def num_timesteps(self):
+        return self._num_timesteps
+
+    @property
+    def interrupt(self):
+        return self._interrupt
+    
     # --- Update __call__ method to accept llm_system_prompt ---
     @torch.no_grad()
     def __call__(
@@ -550,19 +608,17 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         height = height or self.default_sample_size * self.vae_scale_factor
         width = width or self.default_sample_size * self.vae_scale_factor
         division = self.vae_scale_factor * 2
-        
         # Force dimensions to be divisible by division without any area scaling
         width = int(width // division * division)
         height = int(height // division * division)
-        
         # Ensure minimum dimensions
         width = max(width, division)
         height = max(height, division)
-
+        
         self._guidance_scale = guidance_scale
         self._joint_attention_kwargs = joint_attention_kwargs
         self._interrupt = False
-
+        
         # 2. Define call parameters
         if prompt is not None and isinstance(prompt, str):
             batch_size = 1
@@ -570,43 +626,43 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             batch_size = len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
-
+            
         device = self._execution_device
-
         lora_scale = (
             self.joint_attention_kwargs.get("scale", None) if self.joint_attention_kwargs is not None else None
         )
+        
         # Pass the system prompt to encode_prompt
-    (
-        prompt_embeds,
-        negative_prompt_embeds,
-        pooled_prompt_embeds,
-        negative_pooled_prompt_embeds,
-    ) = self.encode_prompt(
-        prompt=prompt,
-        prompt_2=prompt_2,
-        prompt_3=prompt_3,
-        prompt_4=prompt_4,
-        negative_prompt=negative_prompt,
-        negative_prompt_2=negative_prompt_2,
-        negative_prompt_3=negative_prompt_3,
-        negative_prompt_4=negative_prompt_4,
-        do_classifier_free_guidance=self.do_classifier_free_guidance,
-        prompt_embeds=prompt_embeds,
-        negative_prompt_embeds=negative_prompt_embeds,
-        pooled_prompt_embeds=pooled_prompt_embeds,
-        negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
-        device=device,
-        num_images_per_prompt=num_images_per_prompt,
-        max_sequence_length=max_sequence_length,
-        max_sequence_length_clip_l=max_sequence_length_clip_l,
-        max_sequence_length_openclip=max_sequence_length_openclip,
-        max_sequence_length_t5=max_sequence_length_t5,
-        max_sequence_length_llama=max_sequence_length_llama,
-        llm_system_prompt=llm_system_prompt,
-        lora_scale=lora_scale,
-    )
-
+        (
+            prompt_embeds,
+            negative_prompt_embeds,
+            pooled_prompt_embeds,
+            negative_pooled_prompt_embeds,
+        ) = self.encode_prompt(
+            prompt=prompt,
+            prompt_2=prompt_2,
+            prompt_3=prompt_3,
+            prompt_4=prompt_4,
+            negative_prompt=negative_prompt,
+            negative_prompt_2=negative_prompt_2,
+            negative_prompt_3=negative_prompt_3,
+            negative_prompt_4=negative_prompt_4,
+            do_classifier_free_guidance=self.do_classifier_free_guidance,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            negative_pooled_prompt_embeds=negative_pooled_prompt_embeds,
+            device=device,
+            num_images_per_prompt=num_images_per_prompt,
+            max_sequence_length=max_sequence_length,
+            max_sequence_length_clip_l=max_sequence_length_clip_l,
+            max_sequence_length_openclip=max_sequence_length_openclip,
+            max_sequence_length_t5=max_sequence_length_t5,
+            max_sequence_length_llama=max_sequence_length_llama,
+            llm_system_prompt=llm_system_prompt,
+            lora_scale=lora_scale,
+        )
+        
         if self.do_classifier_free_guidance:
             prompt_embeds_arr = []
             for n, p in zip(negative_prompt_embeds, prompt_embeds):
@@ -616,7 +672,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                     prompt_embeds_arr.append(torch.cat([n, p], dim=1))
             prompt_embeds = prompt_embeds_arr
             pooled_prompt_embeds = torch.cat([negative_pooled_prompt_embeds, pooled_prompt_embeds], dim=0)
-
+            
         # 4. Prepare latent variables
         num_channels_latents = self.transformer.config.in_channels
         latents = self.prepare_latents(
@@ -629,11 +685,10 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             generator,
             latents,
         )
-
+        
         if latents.shape[-2] != latents.shape[-1]:
             B, C, H, W = latents.shape
             pH, pW = H // self.transformer.config.patch_size, W // self.transformer.config.patch_size
-
             img_sizes = torch.tensor([pH, pW], dtype=torch.int64).reshape(-1)
             img_ids = torch.zeros(pH, pW, 3)
             img_ids[..., 1] = img_ids[..., 1] + torch.arange(pH)[:, None]
@@ -641,15 +696,14 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             img_ids = img_ids.reshape(pH * pW, -1)
             img_ids_pad = torch.zeros(self.transformer.max_seq, 3)
             img_ids_pad[:pH*pW, :] = img_ids
-
-            img_sizes = img_sizes.unsqueeze(0).to(latents.device) 
-            img_ids = img_ids_pad.unsqueeze(0).to(latents.device) 
+            img_sizes = img_sizes.unsqueeze(0).to(latents.device)
+            img_ids = img_ids_pad.unsqueeze(0).to(latents.device)
             if self.do_classifier_free_guidance:
                 img_sizes = img_sizes.repeat(2 * B, 1)
                 img_ids = img_ids.repeat(2 * B, 1, 1)
         else:
             img_sizes = img_ids = None
-
+            
         # 5. Prepare timesteps
         mu = calculate_shift(self.transformer.max_seq)
         scheduler_kwargs = {"mu": mu}
@@ -664,33 +718,35 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 sigmas=sigmas,
                 **scheduler_kwargs,
             )
+            
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)
         self._num_timesteps = len(timesteps)
-
+        
         # 6. Denoising loop
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 if self.interrupt:
                     continue
-
+                    
                 # expand the latents if we are doing classifier free guidance
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+                
                 # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
                 timestep = t.expand(latent_model_input.shape[0])
-
+                
                 if latent_model_input.shape[-2] != latent_model_input.shape[-1]:
                     B, C, H, W = latent_model_input.shape
                     patch_size = self.transformer.config.patch_size
                     pH, pW = H // patch_size, W // patch_size
                     out = torch.zeros(
-                        (B, C, self.transformer.max_seq, patch_size * patch_size), 
-                        dtype=latent_model_input.dtype, 
+                        (B, C, self.transformer.max_seq, patch_size * patch_size),
+                        dtype=latent_model_input.dtype,
                         device=latent_model_input.device
                     )
                     latent_model_input = einops.rearrange(latent_model_input, 'B C (H p1) (W p2) -> B C (H W) (p1 p2)', p1=patch_size, p2=patch_size)
                     out[:, :, 0:pH*pW] = latent_model_input
                     latent_model_input = out
-
+                    
                 noise_pred = self.transformer(
                     hidden_states = latent_model_input,
                     timesteps = timestep,
@@ -700,52 +756,50 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                     img_ids = img_ids,
                     return_dict = False,
                 )[0]
+                
                 noise_pred = -noise_pred
-
+                
                 # perform guidance
                 if self.do_classifier_free_guidance:
                     noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
-
+                    
                 # compute the previous noisy sample x_t -> x_t-1
                 latents_dtype = latents.dtype
                 latents = self.scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-
+                
                 if latents.dtype != latents_dtype:
                     if torch.backends.mps.is_available():
                         # some platforms (eg. apple mps) misbehave due to a pytorch bug: https://github.com/pytorch/pytorch/pull/99272
                         latents = latents.to(latents_dtype)
-
+                        
                 if callback_on_step_end is not None:
                     callback_kwargs = {}
                     for k in callback_on_step_end_tensor_inputs:
                         callback_kwargs[k] = locals()[k]
                     callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
-
                     latents = callback_outputs.pop("latents", latents)
                     prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
                     negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
-
+                    
                 # call the callback, if provided
                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
                     progress_bar.update()
-
+                    
                 if XLA_AVAILABLE:
                     xm.mark_step()
-
+                    
         if output_type == "latent":
             image = latents
-
         else:
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
-
             image = self.vae.decode(latents, return_dict=False)[0]
             image = self.image_processor.postprocess(image, output_type=output_type)
-
+            
         # Offload all models
         self.maybe_free_model_hooks()
-
+        
         if not return_dict:
             return (image,)
-
+            
         return HiDreamImagePipelineOutput(images=image)

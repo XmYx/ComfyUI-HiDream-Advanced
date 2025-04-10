@@ -263,21 +263,20 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         prompt = [prompt] if isinstance(prompt, str) else prompt
         batch_size = len(prompt)
         
-        # Check if all prompts are empty
+        # Check if all prompts are empty - THIS IS THE KEY CHANGE
         all_empty = all(not p.strip() for p in prompt)
         if all_empty:
-            print("LLM encoder received blank prompts, returning zero embeddings")
+            print("LLM encoder received blank prompts, returning zero embeddings (ignoring system prompt)")
             # Create zero embeddings with proper shape
             hidden_size = self.text_encoder_4.config.hidden_size
             num_layers = len(self.text_encoder_4.model.layers)
-            # Usually 32 layers for Llama models
             zero_embeddings = torch.zeros(
                 (num_layers, batch_size * num_images_per_prompt, max_sequence_length, hidden_size),
                 device=device, dtype=dtype
             )
             return zero_embeddings
         
-        # Format prompts with system message
+        # Only format non-empty prompts with system message
         formatted_prompts = []
         for p in prompt:
             if p.strip():  # Only format non-empty prompts
@@ -285,8 +284,10 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
                 formatted_prompts.append(formatted_prompt)
             else:
-                formatted_prompts.append(p)  # Keep empty prompts as is
-        
+                # Important: for empty prompts, DON'T include the system prompt
+                # Just pass a minimal empty prompt that won't contribute to the output
+                formatted_prompts.append("")
+                
         text_inputs = self.tokenizer_4(
             formatted_prompts,
             padding="max_length",

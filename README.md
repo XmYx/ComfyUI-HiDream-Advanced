@@ -1,6 +1,6 @@
 I've decided to break this fork off into it's own repository since I am making many library changes that could be detrimental to a larger project if pulled upstream. My thanks to https://github.com/lum3on/comfyui_HiDream-Sampler for their initial work on the project!
 
-# Patch Notes for the update for today 4/10/25 #
+# Patch Notes 4/10/25 #
 **HiDream Sampler node**
 - Reverted the simple node to using aspect ratio presets for resolution due to issues with the model throwing black box errors outside of it's standard accepted resolutions.
 - added under-hood logic for setting all prompt encoders to scale-weight 1.0 and receiving the same prompt input

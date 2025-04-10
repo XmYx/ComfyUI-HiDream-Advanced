@@ -1,4 +1,30 @@
-## Added Many improvements! ##
+I've decided to break this fork off into it's own repository since I am making many library changes that could be detrimental to a larger project if pulled upstream. My thanks to https://github.com/lum3on/comfyui_HiDream-Sampler for their initial work on the project!
+
+# Patch Notes for the update for today 4/10/25 #
+**HiDream Sampler node**
+- Reverted the simple node to using aspect ratio presets for resolution due to issues with the model throwing black box errors outside of it's standard accepted resolutions.
+- added under-hood logic for setting all prompt encoders to scale-weight 1.0 and receiving the same prompt input
+- added default system prompt for LLM encoder
+
+**HiDream Sampler (Advanced) node**
+- added back the aspect_ratio selector box with the usable presets due to reasoning above
+- - advanced mode aspect_ratio box allows for setting custom size inputs
+- added a new input 'square_resolution' that defaults to 1024 and allows you to create larger (or smaller) square images. 
+- - it starts to get pretty wonky above 3MP, but I was getting good results at 1280x1280 and 1536x1536.
+- height/width are now custom_height and custom_width, both default to 1024 and are only enabled if "Custom" is selected on the aspect_ratio drop down.
+- Exposed llm_system_prompt with a default 'make it nicer' system prompt
+- exposed weights for all encoders, scalable from 0.0 to 5.0
+- - Setting scale weight to 0.0 effectively 'turns off' the embeddings for that encoder
+- added new handling for blank inputs on the individual encoder prompt channels to try to prevent the LLM from creating hallucinatory noise when it doesn't receive an input prompt.  
+
+# HiDream Library Changes # 
+- exposed system prompt of LLM encoder and exposed on library call as llm_system_prompt
+- added individual encoder scaling, defaulting to 1.0 multiplier
+- exposed multiplier scale weights on library call
+
+-------
+# Previous Update #
+**Added Many improvements!**
 - Added "use_uncensored_llm" option - this currently loads a different llama3.1-8b model that is just as censored as the first model. I will work on setting up a proper LLM replacement here, but may take a few days to get working properly. Until then this is just a "try a different LLM model" button. ** THIS IS STILL A WIP, DON'T @ ME **
 - Renamed the existing node to "HiDream Sampler"
 - Added new Node "HiDream Sampler (Advanced)"

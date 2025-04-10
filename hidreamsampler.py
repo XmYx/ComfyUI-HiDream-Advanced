@@ -400,31 +400,24 @@ class HiDreamSampler:
             }
         }
     
-    def generate(self, model_type, prompt, negative_prompt, aspect_ratio, seed, scheduler, 
+    def generate(self, model_type, prompt, negative_prompt, aspect_ratio, seed, scheduler,
                  override_steps, override_cfg, use_uncensored_llm=False, **kwargs):
-        
         # Parse resolution from aspect ratio using the static method
         width, height = HiDreamSampler.parse_aspect_ratio(aspect_ratio)
         print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
-        
         # Make dimensions divisible by 64
         width = (width // 64) * 64
         height = (height // 64) * 64
-        
         # Monitor initial memory usage
         if torch.cuda.is_available():
             initial_mem = torch.cuda.memory_allocated() / 1024**2
             print(f"HiDream: Initial VRAM usage: {initial_mem:.2f} MB")
-            
         if not MODEL_CONFIGS or model_type == "error":
             print("HiDream Error: No models loaded.")
             return (torch.zeros((1, 512, 512, 3)),)
-            
         pipe = None; config = None
-        
         # Create cache key that includes uncensored state
         cache_key = f"{model_type}_{'uncensored' if use_uncensored_llm else 'standard'}"
-        
         # --- Model Loading / Caching ---
         if cache_key in self._model_cache:
             print(f"Checking cache for {cache_key}...")
@@ -437,7 +430,6 @@ class HiDreamSampler:
                 pipe, config = None, None
             if valid_cache:
                 print("Using cached model.")
-                
         if pipe is None:
             if self._model_cache:
                 print(f"Clearing ALL cache before loading {model_type}...")
@@ -466,7 +458,6 @@ class HiDreamSampler:
                     # Force synchronization
                     torch.cuda.synchronize()
                 print("Cache cleared.")
-                
             print(f"Loading model for {model_type}{' (uncensored)' if use_uncensored_llm else ''}...")
             try:
                 pipe, config = load_models(model_type, use_uncensored_llm)
@@ -477,18 +468,14 @@ class HiDreamSampler:
                 import traceback
                 traceback.print_exc()
                 return (torch.zeros((1, 512, 512, 3)),)
-                
         if pipe is None or config is None:
             print("CRITICAL ERROR: Load failed.")
             return (torch.zeros((1, 512, 512, 3)),)
-            
         # --- Update scheduler if requested ---
         original_scheduler_class = config["scheduler_class"]
         original_shift = config["shift"]
-        
         if scheduler != "Default for model":
             print(f"Replacing default scheduler ({original_scheduler_class}) with: {scheduler}")
-            
             # Create a completely fresh scheduler instance to avoid any parameter leakage
             if scheduler == "UniPC":
                 new_scheduler = FlowUniPCMultistepScheduler(num_train_timesteps=1000, shift=original_shift, use_dynamic_shifting=False)
@@ -498,15 +485,15 @@ class HiDreamSampler:
                 pipe.scheduler = new_scheduler
             elif scheduler == "Karras Euler":
                 new_scheduler = FlashFlowMatchEulerDiscreteScheduler(
-                    num_train_timesteps=1000, 
-                    shift=original_shift, 
+                    num_train_timesteps=1000,
+                    shift=original_shift,
                     use_dynamic_shifting=False,
                     use_karras_sigmas=True
                 )
                 pipe.scheduler = new_scheduler
             elif scheduler == "Karras Exponential":
                 new_scheduler = FlashFlowMatchEulerDiscreteScheduler(
-                    num_train_timesteps=1000, 
+                    num_train_timesteps=1000,
                     shift=original_shift,
                     use_dynamic_shifting=False,
                     use_exponential_sigmas=True
@@ -516,29 +503,26 @@ class HiDreamSampler:
             # Ensure we're using the original scheduler as specified in the model config
             print(f"Using model's default scheduler: {original_scheduler_class}")
             pipe.scheduler = get_scheduler_instance(original_scheduler_class, original_shift)
-                
         # --- Generation Setup ---
         is_nf4_current = config.get("is_nf4", False)
         num_inference_steps = override_steps if override_steps >= 0 else config["num_inference_steps"]
         guidance_scale = override_cfg if override_cfg >= 0.0 else config["guidance_scale"]
-        
+        # Create the progress bar
+        pbar = comfy.utils.ProgressBar(num_inference_steps)
         # Set default max sequence lengths
         max_length_clip_l = 77
         max_length_openclip = 150
         max_length_t5 = 256
         max_length_llama = 256
-        
         try:
             inference_device = comfy.model_management.get_torch_device()
         except Exception:
             inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            
         print(f"Creating Generator on: {inference_device}")
         generator = torch.Generator(device=inference_device).manual_seed(seed)
         print(f"\n--- Starting Generation ---")
         print(f"Model: {model_type}{' (uncensored)' if use_uncensored_llm else ''}, Res: {height}x{width}, Steps: {num_inference_steps}, CFG: {guidance_scale}, Seed: {seed}")
         print(f"Using standard sequence lengths: CLIP-L: {max_length_clip_l}, OpenCLIP: {max_length_openclip}, T5: {max_length_t5}, Llama: {max_length_llama}")
-        
         # --- Run Inference ---
         output_images = None
         try:
@@ -547,9 +531,7 @@ class HiDreamSampler:
                 pipe.to(inference_device)
             else:
                 print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
-                
             print("Executing pipeline inference...")
-            
             # Call pipeline with individual sequence lengths
             with torch.inference_mode():
                 output_images = pipe(
@@ -575,7 +557,6 @@ class HiDreamSampler:
             return (torch.zeros((1, height, width, 3)),)
         finally:
             pbar.update_absolute(num_inference_steps) # Update pbar regardless
-            
         print("--- Generation Complete ---")
         
         # Robust output handling

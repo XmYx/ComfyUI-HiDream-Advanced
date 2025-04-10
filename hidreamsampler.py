@@ -630,6 +630,10 @@ class HiDreamSamplerAdvanced:
                 "openclip_prompt": ("STRING", {"multiline": True, "default": ""}),
                 "t5_prompt": ("STRING", {"multiline": True, "default": ""}),
                 "llama_prompt": ("STRING", {"multiline": True, "default": ""}),
+                "llm_system_prompt": ("STRING", {
+                    "multiline": True, 
+                    "default": "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions."
+                }),
                 "max_length_clip_l": ("INT", {"default": 77, "min": 64, "max": 218}),
                 "max_length_openclip": ("INT", {"default": 77, "min": 64, "max": 218}),
                 "max_length_t5": ("INT", {"default": 128, "min": 64, "max": 512}),
@@ -645,7 +649,9 @@ class HiDreamSamplerAdvanced:
     def generate(self, model_type, primary_prompt, negative_prompt, width, height, seed, scheduler, 
                  override_steps, override_cfg, use_uncensored_llm=False,
                  clip_l_prompt="", openclip_prompt="", t5_prompt="", llama_prompt="",
+                 llm_system_prompt="You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
                  max_length_clip_l=77, max_length_openclip=77, max_length_t5=128, max_length_llama=128, **kwargs):
+                     
         print("DEBUG: Advanced node generate() called")
                      
         # Monitor initial memory usage
@@ -792,8 +798,9 @@ class HiDreamSamplerAdvanced:
             print(f"  OpenCLIP ({max_length_openclip} tokens): {prompt_openclip[:50]}{'...' if len(prompt_openclip) > 50 else ''}")
             print(f"  T5 ({max_length_t5} tokens): {prompt_t5[:50]}{'...' if len(prompt_t5) > 50 else ''}")
             print(f"  Llama ({max_length_llama} tokens): {prompt_llama[:50]}{'...' if len(prompt_llama) > 50 else ''}")
+            print(f"  LLM System Prompt: {llm_system_prompt[:50]}{'...' if len(llm_system_prompt) > 50 else ''}")
             
-            # Call pipeline with encoder-specific prompts
+            # Call pipeline with encoder-specific prompts and system prompt
             with torch.inference_mode():
                 output_images = pipe(
                     prompt=prompt_clip_l,         # CLIP-L specific prompt
@@ -811,6 +818,7 @@ class HiDreamSamplerAdvanced:
                     max_sequence_length_openclip=max_length_openclip,
                     max_sequence_length_t5=max_length_t5,
                     max_sequence_length_llama=max_length_llama,
+                    llm_system_prompt=llm_system_prompt,
                 ).images
             print("Pipeline inference finished.")
         except Exception as e:

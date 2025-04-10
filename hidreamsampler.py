@@ -357,13 +357,23 @@ class HiDreamSampler:
             "Karras Exponential"
         ]
         
+        # Resolution options
+        aspect_ratio_options = [
+            "1:1 (1024×1024)",
+            "9:16 (768×1360)",
+            "16:9 (1360×768)",
+            "3:4 (880×1168)",
+            "4:3 (1168×880)",
+            "3:2 (1248×832)",
+            "2:3 (832×1248)"
+        ]
+        
         return {
             "required": {
                 "model_type": (available_model_types, {"default": default_model}),
                 "prompt": ("STRING", {"multiline": True, "default": "..."}),
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "width": ("INT", {"default": 1024, "min": 256, "max": 3096, "step": 8}),
-                "height": ("INT", {"default": 1024, "min": 256, "max": 3096, "step": 8}),
+                "aspect_ratio": (aspect_ratio_options, {"default": "1:1 (1024×1024)"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "scheduler": (scheduler_options, {"default": "Default for model"}),
                 "override_steps": ("INT", {"default": -1, "min": -1, "max": 100}),
@@ -372,14 +382,23 @@ class HiDreamSampler:
             }
         }
     
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "generate"
-    CATEGORY = "HiDream"
+    def parse_aspect_ratio(aspect_ratio_str):
+        """Parse aspect ratio string to get width and height"""
+        try:
+            # Extract dimensions from the parenthesis
+            dims_part = aspect_ratio_str.split("(")[1].split(")")[0]
+            width, height = dims_part.split("×")
+            return int(width), int(height)
+        except Exception as e:
+            print(f"Error parsing aspect ratio '{aspect_ratio_str}': {e}. Falling back to 1024x1024.")
+            return 1024, 1024
     
-    # In basic node
-    def generate(self, model_type, prompt, negative_prompt, width, height, seed, scheduler, 
+    def generate(self, model_type, prompt, negative_prompt, aspect_ratio, seed, scheduler, 
                  override_steps, override_cfg, use_uncensored_llm=False, **kwargs):
+        
+        # Parse resolution from aspect ratio
+        width, height = self.parse_aspect_ratio(aspect_ratio)
+        print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
         
         # Monitor initial memory usage
         if torch.cuda.is_available():
@@ -604,6 +623,7 @@ class HiDreamSamplerAdvanced:
             return {"required": {"error": ("STRING", {"default": "No models available...", "multiline": True})}}
         default_model = "fast-nf4" if "fast-nf4" in available_model_types else "fast" if "fast" in available_model_types else available_model_types[0]
         
+        # Define schedulers
         scheduler_options = [
             "Default for model",
             "UniPC",
@@ -612,13 +632,24 @@ class HiDreamSamplerAdvanced:
             "Karras Exponential"
         ]
         
+        # Resolution options
+        aspect_ratio_options = [
+            "1:1 (Square)",
+            "9:16 (Portrait)",
+            "16:9 (Landscape)",
+            "3:4 (Portrait)",
+            "4:3 (Landscape)",
+            "3:2 (Landscape)",
+            "2:3 (Portrait)",
+            "Custom"
+        ]
+        
         return {
             "required": {
                 "model_type": (available_model_types, {"default": default_model}),
                 "primary_prompt": ("STRING", {"multiline": True, "default": "..."}),
                 "negative_prompt": ("STRING", {"multiline": True, "default": ""}),
-                "width": ("INT", {"default": 1024, "min": 512, "max": 2048, "step": 8}),
-                "height": ("INT", {"default": 1024, "min": 512, "max": 2048, "step": 8}),
+                "aspect_ratio": (aspect_ratio_options, {"default": "1:1 (Square)"}),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
                 "scheduler": (scheduler_options, {"default": "Default for model"}),
                 "override_steps": ("INT", {"default": -1, "min": -1, "max": 100}),
@@ -634,6 +665,9 @@ class HiDreamSamplerAdvanced:
                     "multiline": True, 
                     "default": "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions."
                 }),
+                "square_resolution": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),
+                "custom_width": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),
+                "custom_height": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),
                 "max_length_clip_l": ("INT", {"default": 77, "min": 64, "max": 218}),
                 "max_length_openclip": ("INT", {"default": 77, "min": 64, "max": 218}),
                 "max_length_t5": ("INT", {"default": 128, "min": 64, "max": 512}),
@@ -641,18 +675,45 @@ class HiDreamSamplerAdvanced:
             }
         }
     
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "generate"
-    CATEGORY = "HiDream"
+    def get_resolution(self, aspect_ratio, square_resolution=1024, custom_width=1024, custom_height=1024):
+        """Determine resolution based on aspect ratio and optional parameters"""
+        if aspect_ratio == "1:1 (Square)":
+            # Use the square_resolution parameter for both dimensions
+            return square_resolution, square_resolution
+        elif aspect_ratio == "Custom":
+            # Use custom width and height
+            return custom_width, custom_height
+        elif aspect_ratio == "9:16 (Portrait)":
+            base_width, base_height = 768, 1360
+        elif aspect_ratio == "16:9 (Landscape)":
+            base_width, base_height = 1360, 768
+        elif aspect_ratio == "3:4 (Portrait)":
+            base_width, base_height = 880, 1168
+        elif aspect_ratio == "4:3 (Landscape)":
+            base_width, base_height = 1168, 880
+        elif aspect_ratio == "3:2 (Landscape)":
+            base_width, base_height = 1248, 832
+        elif aspect_ratio == "2:3 (Portrait)":
+            base_width, base_height = 832, 1248
+        else:
+            # Default to square 1024x1024
+            return 1024, 1024
+            
+        # Ensure dimensions are divisible by 64
+        width = (base_width // 64) * 64
+        height = (base_height // 64) * 64
+        return width, height
     
-    def generate(self, model_type, primary_prompt, negative_prompt, width, height, seed, scheduler, 
+    def generate(self, model_type, primary_prompt, negative_prompt, aspect_ratio, seed, scheduler, 
                  override_steps, override_cfg, use_uncensored_llm=False,
                  clip_l_prompt="", openclip_prompt="", t5_prompt="", llama_prompt="",
-                 llm_system_prompt="You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+                 llm_system_prompt="You are a creative AI assistant...",
+                 square_resolution=1024, custom_width=1024, custom_height=1024,
                  max_length_clip_l=77, max_length_openclip=77, max_length_t5=128, max_length_llama=128, **kwargs):
-                     
-        print("DEBUG: Advanced node generate() called")
+        
+        # Get width and height based on aspect ratio and other parameters
+        width, height = self.get_resolution(aspect_ratio, square_resolution, custom_width, custom_height)
+        print(f"Using resolution: {width}×{height} from aspect ratio: {aspect_ratio}")
                      
         # Monitor initial memory usage
         if torch.cuda.is_available():

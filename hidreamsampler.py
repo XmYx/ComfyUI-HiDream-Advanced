@@ -514,6 +514,13 @@ class HiDreamSampler:
         max_length_openclip = 150
         max_length_t5 = 256
         max_length_llama = 256
+
+        # Set default encoder weights
+        clip_l_weight = 1.0
+        openclip_weight = 1.0
+        t5_weight = 1.0
+        llama_weight = 1.0
+                     
         try:
             inference_device = comfy.model_management.get_torch_device()
         except Exception:
@@ -664,6 +671,10 @@ class HiDreamSamplerAdvanced:
                     "multiline": True, 
                     "default": "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions."
                 }),
+                "clip_l_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "openclip_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "t5_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
+                "llama_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
                 "square_resolution": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),
                 "custom_width": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),
                 "custom_height": ("INT", {"default": 1024, "min": 512, "max": 3072, "step": 64}),

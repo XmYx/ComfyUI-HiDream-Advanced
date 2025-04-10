@@ -557,6 +557,10 @@ class HiDreamSampler:
                     max_sequence_length_openclip=max_length_openclip,
                     max_sequence_length_t5=max_length_t5,
                     max_sequence_length_llama=max_length_llama,
+                    clip_l_scale=clip_l_weight,
+                    openclip_scale=openclip_weight,
+                    t5_scale=t5_weight,
+                    llama_scale=llama_weight,
                 ).images
             print("Pipeline inference finished.")
         except Exception as e:
@@ -698,12 +702,13 @@ class HiDreamSamplerAdvanced:
             print(f"Error parsing aspect ratio '{aspect_ratio_str}': {e}. Falling back to 1024x1024.")
             return 1024, 1024
     
-    def generate(self, model_type, primary_prompt, negative_prompt, aspect_ratio, seed, scheduler, 
+    def generate(self, model_type, primary_prompt, negative_prompt, aspect_ratio, seed, scheduler,
                  override_steps, override_cfg, use_uncensored_llm=False,
                  clip_l_prompt="", openclip_prompt="", t5_prompt="", llama_prompt="",
                  llm_system_prompt="You are a creative AI assistant...",
                  square_resolution=1024, custom_width=1024, custom_height=1024,
-                 max_length_clip_l=77, max_length_openclip=77, max_length_t5=128, max_length_llama=128, **kwargs):
+                 max_length_clip_l=77, max_length_openclip=77, max_length_t5=128, max_length_llama=128,
+                 clip_l_weight=1.0, openclip_weight=1.0, t5_weight=1.0, llama_weight=1.0, **kwargs):
         
         # Get width and height based on aspect ratio
         if "Square Reso" in aspect_ratio:
@@ -906,6 +911,10 @@ class HiDreamSamplerAdvanced:
                     max_sequence_length_t5=max_length_t5,
                     max_sequence_length_llama=max_length_llama,
                     llm_system_prompt=custom_system_prompt,
+                    clip_l_scale=clip_l_weight,
+                    openclip_scale=openclip_weight,
+                    t5_scale=t5_weight,
+                    llama_scale=llama_weight,
                 ).images
             print("Pipeline inference finished.")
         except Exception as e:

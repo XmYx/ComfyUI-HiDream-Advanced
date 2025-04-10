@@ -891,6 +891,14 @@ class HiDreamSamplerAdvanced:
                 prompt_llama = "."
                 custom_system_prompt = "You will only output a single period as your output '.'\nDo not add any other acknowledgement or extra text or data."
 
+            # Create the progress bar
+            pbar = comfy.utils.ProgressBar(num_inference_steps)
+            
+            # Define a progress callback function that updates the ComfyUI progress bar
+            def progress_callback(pipe, i, t, callback_kwargs):
+                # Update ComfyUI progress bar
+                pbar.update_absolute(i+1)
+                return callback_kwargs
             
             # Call pipeline with encoder-specific prompts and system prompt
             with torch.inference_mode():
@@ -915,6 +923,8 @@ class HiDreamSamplerAdvanced:
                     openclip_scale=openclip_weight,
                     t5_scale=t5_weight,
                     llama_scale=llama_weight,
+                    callback_on_step_end=progress_callback,
+                    callback_on_step_end_tensor_inputs=["latents"],
                 ).images
             print("Pipeline inference finished.")
         except Exception as e:

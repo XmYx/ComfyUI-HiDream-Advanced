@@ -535,7 +535,10 @@ class HiDreamSampler:
             # Call pipeline with individual sequence lengths
             with torch.inference_mode():
                 output_images = pipe(
-                    prompt=prompt,
+                    prompt=prompt,           # CLIP-L 
+                    prompt_2=prompt,         # OpenCLIP - explicitly send same prompt
+                    prompt_3=prompt,         # T5 - explicitly send same prompt
+                    prompt_4=prompt,         # LLM - explicitly send same prompt
                     negative_prompt=negative_prompt.strip() if negative_prompt else None,
                     height=height,
                     width=width,
@@ -543,7 +546,6 @@ class HiDreamSampler:
                     num_inference_steps=num_inference_steps,
                     num_images_per_prompt=1,
                     generator=generator,
-                    max_sequence_length=128,  # Default fallback
                     max_sequence_length_clip_l=max_length_clip_l,
                     max_sequence_length_openclip=max_length_openclip,
                     max_sequence_length_t5=max_length_t5,
@@ -855,6 +857,24 @@ class HiDreamSamplerAdvanced:
             print(f"  OpenCLIP ({max_length_openclip} tokens): {prompt_openclip[:50]}{'...' if len(prompt_openclip) > 50 else ''}")
             print(f"  T5 ({max_length_t5} tokens): {prompt_t5[:50]}{'...' if len(prompt_t5) > 50 else ''}")
             print(f"  Llama ({max_length_llama} tokens): {prompt_llama[:50]}{'...' if len(prompt_llama) > 50 else ''}")
+
+                        
+            # Replace truly blank inputs with minimal period
+            if not prompt_clip_l.strip():
+                prompt_clip_l = "."
+                
+            if not prompt_openclip.strip():
+                prompt_openclip = "."
+                
+            if not prompt_t5.strip():
+                prompt_t5 = "."
+                
+            # Custom system prompt for blank LLM prompts to try to prevent LLM output noise
+            custom_system_prompt = llm_system_prompt
+            if not prompt_llama.strip():
+                prompt_llama = "."
+                custom_system_prompt = "You will only output a single period as your output '.'\nDo not add any other acknowledgement or extra text or data."
+
             
             # Call pipeline with encoder-specific prompts and system prompt
             with torch.inference_mode():
@@ -874,7 +894,7 @@ class HiDreamSamplerAdvanced:
                     max_sequence_length_openclip=max_length_openclip,
                     max_sequence_length_t5=max_length_t5,
                     max_sequence_length_llama=max_length_llama,
-                    llm_system_prompt=llm_system_prompt,
+                    llm_system_prompt=custom_system_prompt,
                 ).images
             print("Pipeline inference finished.")
         except Exception as e:

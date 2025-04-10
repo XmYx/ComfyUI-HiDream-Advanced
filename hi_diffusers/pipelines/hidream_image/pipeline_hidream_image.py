@@ -306,6 +306,11 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         max_sequence_length_t5: Optional[int] = None,
         max_sequence_length_llama: Optional[int] = None,
         lora_scale: Optional[float] = None,
+        llm_system_prompt: str = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        clip_l_scale: float = 1.0,
+        openclip_scale: float = 1.0,
+        t5_scale: float = 1.0,
+        llama_scale: float = 1.0,
     ):
         prompt = [prompt] if isinstance(prompt, str) else prompt
         if prompt is not None:
@@ -329,6 +334,11 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             max_sequence_length_openclip = max_sequence_length_openclip,
             max_sequence_length_t5 = max_sequence_length_t5,
             max_sequence_length_llama = max_sequence_length_llama,
+            llm_system_prompt=llm_system_prompt,
+            clip_l_scale=clip_l_scale,
+            openclip_scale=openclip_scale,
+            t5_scale=t5_scale,
+            llama_scale=llama_scale,
         )
 
         if do_classifier_free_guidance and negative_prompt_embeds is None:
@@ -376,6 +386,11 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 max_sequence_length_openclip = max_sequence_length_openclip,
                 max_sequence_length_t5 = max_sequence_length_t5,
                 max_sequence_length_llama = max_sequence_length_llama,
+                llm_system_prompt=llm_system_prompt,
+                clip_l_scale=clip_l_scale,
+                openclip_scale=openclip_scale,
+                t5_scale=t5_scale,
+                llama_scale=llama_scale,
             )
         return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
 
@@ -637,6 +652,11 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             num_images_per_prompt=num_images_per_prompt,
             max_sequence_length=max_sequence_length,
             lora_scale=lora_scale,
+            llm_system_prompt=llm_system_prompt,
+            clip_l_scale=clip_l_scale,
+            openclip_scale=openclip_scale,
+            t5_scale=t5_scale,
+            llama_scale=llama_scale,
         )
 
         if self.do_classifier_free_guidance:

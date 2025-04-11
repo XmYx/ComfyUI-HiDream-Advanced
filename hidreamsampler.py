@@ -177,7 +177,7 @@ def load_models(model_type, use_uncensored_llm=False):
     start_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"(Start VRAM: {start_mem:.2f} MB)")
     
     # --- 1. Load LLM (Conditional) ---
-    text_encoder_load_kwargs = {"output_hidden_states": True, "low_cpu_mem_usage": True, "torch_dtype": model_dtype,}
+    text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}
     
     if is_nf4:
         # Choose uncensored model if requested, but keep loading process identical

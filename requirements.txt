@@ -4,14 +4,11 @@ diffusers>=0.26.0
 torch>=2.0.0
 numpy>=1.24.0
 Pillow>=10.0.0
-
 # For standard (BNB) models
 bitsandbytes>=0.41.0
-
 # For NF4 models
 optimum>=1.12.0
 accelerate>=0.25.0
 auto-gptq>=0.5.0
-
-# Optional but recommended for better performance
-flash-attn>=2.3.0  # For Flash Attention 2 support
+# Optional for faster attention (Linux/CUDA only)
+# flash-attn>=2.3.0  # Optional: For Flash Attention 2 support

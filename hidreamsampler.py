@@ -16,15 +16,25 @@ import gc
 import os # For checking paths if needed
 import huggingface_hub
 from safetensors.torch import load_file
-# --- Check for Transformers version issues
-# Add after imports
+
+# --- Check for Torch and Transformers version issues
 try:
-    from transformers import __version__ as transformers_version
     import packaging.version
+    import torch
+    import transformers
+    
+    torch_version = torch.__version__
+    transformers_version = transformers.__version__
+    
+    if packaging.version.parse(torch_version) < packaging.version.parse("2.1.0"):
+        print("⚠️ WARNING: Your PyTorch version is older than 2.1.0")
+        print("   Windows users may need PyTorch 2.1.0+ for NF4 models")
+        print("   Get the correct version at pytorch.org for your CUDA version")
+    
     if packaging.version.parse(transformers_version) < packaging.version.parse("4.36.0"):
-        print("⚠️ WARNING: Your transformers version is older than 4.36.0 which may cause compatibility issues with NF4 models.")
-        print("⚠️ Consider upgrading with: pip install --upgrade transformers>=4.36.0")
-except ImportError:
+        print("⚠️ WARNING: Your transformers version is older than 4.36.0")
+        print("   May have compatibility issues with NF4 models: pip install --upgrade transformers>=4.36.0")
+except (ImportError, AttributeError):
     pass  # Skip version check if packaging module not available
 
 # --- Optional Dependency Handling ---

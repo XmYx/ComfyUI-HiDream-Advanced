@@ -212,10 +212,11 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
                 timesteps = timesteps[start_step:]
                 print(f"Starting denoising from step {start_step}/{num_inference_steps} (strength: {denoising_strength})")
                 
-                # Add noise to latents based on starting timestep
+                # Direct noise interpolation for Flow Matching models
                 noise = torch.randn(latents.shape, dtype=latents.dtype, device=device, generator=generator)
-                t_start = timesteps[0]
-                latents = self.scheduler.add_noise(latents, noise, t_start)
+                # Interpolate between original latents and noise based on denoising strength
+                latents = (1.0 - denoising_strength) * latents + denoising_strength * noise
+                print(f"Applied noise interpolation with strength: {denoising_strength}")
         
         # Denoising loop
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)

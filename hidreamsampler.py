@@ -226,33 +226,25 @@ def load_models(model_type, use_uncensored_llm=False):
     print(f"[1b] Loading Tokenizer: {llama_model_name}..."); tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False); print("     Tokenizer loaded.")
 
     if is_nf4:
+        # More aggressive RoPE scaling fix
         try:
-            from transformers.models.llama.configuration_llama import LlamaConfig
+            # Direct fix: Load and completely replace the config
+            from transformers import AutoConfig
             
-            # Save the original validation method
-            original_validation = LlamaConfig._rope_scaling_validation
+            # Load the config and make a deep copy we can modify
+            config = AutoConfig.from_pretrained(llama_model_name)
             
-            # Create a patched validation method that always passes
-            def patched_validation(self):
-                # Skip validation if the format doesn't match expectations
-                if not isinstance(self.rope_scaling, dict):
-                    print("     ⚠️ rope_scaling is not a dict, replacing with default")
-                    self.rope_scaling = {"type": "linear", "factor": 1.0}
-                    return
-                    
-                if "type" not in self.rope_scaling and "factor" not in self.rope_scaling:
-                    print("     ⚠️ Fixing rope_scaling format")
-                    factor = self.rope_scaling.get("factor", 1.0)
-                    self.rope_scaling = {"type": "linear", "factor": factor}
+            # Completely replace the rope_scaling with a known good config
+            config.rope_scaling = {"type": "linear", "factor": 1.0}
+            print(f"     ✅ Fixed rope_scaling to: {config.rope_scaling}")
             
-            # Apply the monkey patch
-            LlamaConfig._rope_scaling_validation = patched_validation
-            print("     ✅ Patched LlamaConfig validation")
+            # Force using our fixed config
+            text_encoder_load_kwargs["config"] = config
+            
+            # Disable all validation for good measure
+            text_encoder_load_kwargs["low_cpu_mem_usage"] = True
         except Exception as e:
-            print(f"     ⚠️ Failed to patch config validation: {e}")
-            
-        # Additional fallback - try to use forced download
-        text_encoder_load_kwargs["force_download"] = True
+            print(f"     ⚠️ Failed to patch config: {e}")
     
     print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)"); text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
     if "device_map" not in text_encoder_load_kwargs: print("     Moving text encoder to CUDA..."); text_encoder.to("cuda")
@@ -639,9 +631,9 @@ class HiDreamSampler:
                 print("ERROR: pil2tensor returned None. Creating blank image.")
                 return (torch.zeros((1, height, width, 3)),)
                 
-            # Fix for bfloat16 tensor issue
-            if output_tensor.dtype == torch.bfloat16:
-                print("Converting bfloat16 tensor to float32 for ComfyUI compatibility")
+            # Fix for any non-float32 tensor issue
+            if output_tensor.dtype != torch.float32:
+                print(f"Converting {output_tensor.dtype} tensor to float32 for ComfyUI compatibility")
                 output_tensor = output_tensor.to(torch.float32)
                 
             # Verify tensor shape is valid

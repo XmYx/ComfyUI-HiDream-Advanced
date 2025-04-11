@@ -37,7 +37,7 @@ try:
 except (ImportError, AttributeError):
     pass  # Skip version check if packaging module not available
 
-# --- Optional Dependency Handling ---
+# --- Attention Implementation Detection ---
 try:
     import flash_attn
     flash_attn_available = True
@@ -387,51 +387,31 @@ class HiDreamSampler:
     @classmethod
     def cleanup_models(cls):
         """Clean up all cached models - can be called by external memory management"""
-        is_windows = platform.system() == "Windows"
-        print(f"HiDream: Cleaning up all cached models on {platform.system()}...")
-        
+        print("HiDream: Cleaning up all cached models...")
         keys_to_del = list(cls._model_cache.keys())
         for key in keys_to_del:
             print(f"  Removing '{key}'...")
             try:
                 pipe_to_del, _ = cls._model_cache.pop(key)
-                
-                # Try to move to CPU first (helps on both Windows and Linux)
-                if hasattr(pipe_to_del, 'to'):
-                    try:
-                        pipe_to_del.to("cpu")
-                    except Exception as e:
-                        print(f"    Warning: Could not move pipeline to CPU: {e}")
-                
-                # Clear all major components
-                for component in ['transformer', 'text_encoder', 'text_encoder_2', 
-                                  'text_encoder_3', 'text_encoder_4', 'tokenizer_4', 
-                                  'scheduler', 'vae']:
-                    if hasattr(pipe_to_del, component):
-                        setattr(pipe_to_del, component, None)
-                
+                # More aggressive cleanup - clear all major components
+                if hasattr(pipe_to_del, 'transformer'):
+                    pipe_to_del.transformer = None
+                if hasattr(pipe_to_del, 'text_encoder_4'):
+                    pipe_to_del.text_encoder_4 = None
+                if hasattr(pipe_to_del, 'tokenizer_4'):
+                    pipe_to_del.tokenizer_4 = None
+                if hasattr(pipe_to_del, 'scheduler'):
+                    pipe_to_del.scheduler = None
                 del pipe_to_del
             except Exception as e:
                 print(f"  Error cleaning up {key}: {e}")
-        
-        # Garbage collection passes (more for Windows)
-        gc_passes = 5 if is_windows else 3
-        for i in range(gc_passes):
+        # Multiple garbage collection passes
+        for _ in range(3):
             gc.collect()
-            print(f"  GC pass {i+1}/{gc_passes} completed")
-        
         if torch.cuda.is_available():
-            # Empty cache multiple times
-            for i in range(3):
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                print(f"  CUDA cache clear {i+1}/3 completed")
-            
-            # Report memory after cleanup on all platforms
-            mem_allocated = torch.cuda.memory_allocated() / 1024**2
-            mem_reserved = torch.cuda.memory_reserved() / 1024**2
-            print(f"HiDream: After cleanup - Allocated: {mem_allocated:.2f} MB, Reserved: {mem_reserved:.2f} MB")
-        
+            torch.cuda.empty_cache()
+            # Force synchronization
+            torch.cuda.synchronize()
         print("HiDream: Cache cleared")
         return True
         
@@ -1072,8 +1052,9 @@ class HiDreamSamplerAdvanced:
 
 
 class HiDreamImg2Img:
-    _model_cache = {}  # Separate cache for img2img pipelines
-    cleanup_models = HiDreamSampler.cleanup_models  # Reuse cleanup method
+    _model_cache = HiDreamSampler._model_cache
+    cleanup_models = HiDreamSampler.cleanup_models
+    
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "generate"

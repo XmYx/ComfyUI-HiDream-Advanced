@@ -213,7 +213,7 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
                 print(f"Starting denoising from step {start_step}/{num_inference_steps} (strength: {denoising_strength})")
                 
                 # Add noise to latents based on starting timestep
-                noise = torch.randn_like(latents, device=device, generator=generator)
+                noise = torch.randn(latents.shape, dtype=latents.dtype, device=device, generator=generator)
                 t_start = timesteps[0]
                 latents = self.scheduler.add_noise(latents, noise, t_start)
         

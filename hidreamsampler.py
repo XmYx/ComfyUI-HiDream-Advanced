@@ -54,6 +54,7 @@ try:
     # Assuming hi_diffusers is cloned into this custom_node's directory
     from .hi_diffusers.models.transformers.transformer_hidream_image import HiDreamImageTransformer2DModel
     from .hi_diffusers.pipelines.hidream_image.pipeline_hidream_image import HiDreamImagePipeline
+    from .hi_diffusers.pipelines.hidream_image.pipeline_hidream_image_to_image import HiDreamImageToImagePipeline
     from .hi_diffusers.schedulers.fm_solvers_unipc import FlowUniPCMultistepScheduler
     from .hi_diffusers.schedulers.flash_flow_match import FlashFlowMatchEulerDiscreteScheduler
     hidream_classes_loaded = True

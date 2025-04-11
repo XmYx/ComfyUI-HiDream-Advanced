@@ -1,6 +1,23 @@
 I've decided to break this fork off into it's own repository since I am making many library changes that could be detrimental to a larger project if pulled upstream. My thanks to https://github.com/lum3on/comfyui_HiDream-Sampler for their initial work on the project!
 
-# Patch Notes 4/10/25 #
+## Unofficial img2img support! ##
+
+🖼️🤖🖼️
+
+**New capability Unlocked, image2image for both UniPC and flash_flow_euler**
+
+- Fully supported by NF4-Fast/Dev/Full 
+- Added new library pipeline 'hideream_image_to_image'
+-  - ComfyUI-HiDream-Sampler/hi_diffusers/pipelines/hidream_image/pipeline_hidream_image_to_image.py
+- **Added new HiDream node 'HiDream Image to Image'**
+- - images are automatically resized and inner cropped to HiDream supported aspect ratio/size.
+- - Uses native FFE or UniPC noising, scaling and scheduling for noising the images
+
+![image](https://github.com/user-attachments/assets/e6286e3a-9e3f-491f-9508-f05f498ba210)
+
+
+
+# Update Notes 4/10/25 #
 **HiDream Sampler node**
 - Reverted the simple node to using aspect ratio presets for resolution due to issues with the model throwing black box errors outside of it's standard accepted resolutions.
 - added under-hood logic for setting all prompt encoders to scale-weight 1.0 and receiving the same prompt input

@@ -67,7 +67,8 @@ Many thanks to the folks who created this and set it up for Comfy, I just spent 
 - Full/Dev/Fast requires roughly 27GB VRAM
 - NF4 requires roughly 15GB VRAM
 
-![image](https://github.com/user-attachments/assets/3d4e9bee-772b-4c57-84cb-b5a6da30efd5)
+![workflow (1)](https://github.com/user-attachments/assets/c408e477-2714-434d-acc9-6d49d0476291)
+
 
 # HiDreamSampler for ComfyUI
 
@@ -75,16 +76,16 @@ A custom ComfyUI node for generating images using the HiDream AI model.
 
 ## Features
 - Supports `full`, `dev`, and `fast` model types.
+- Supports `nf4-full`, `nf4-dev`, and `nf4-fast` model types.
 - Configurable resolution and inference steps.
 - Uses 4-bit quantization for lower memory usage.
 
 ## Installation
-Please make sure you have installed Flash Attention. We recommend CUDA versions 12.4 for the manual installation.
+Recommended to install Flash Attention, but not required. Falls back to SDPA and eager attention
 
 1. Clone this repository into your `ComfyUI/custom_nodes/` directory:
    ```bash
-   git clone https://github.com/lum3on/comfyui_HiDream-Sampler ComfyUI/custom_nodes/comfui_HiDream-Sampler
-
+   git clone https://github.com/SanDiegoDude/ComfyUI-HiDream-Sampler.git
 2. Install requirements
     ```bash
     pip install -r requirements.txt
@@ -92,19 +93,61 @@ Please make sure you have installed Flash Attention. We recommend CUDA versions 
 3. Restart ComfyUI.
 
 ## Usage
-- Add the HiDreamSampler node to your workflow.
-- Configure inputs:
-    model_type: Choose full, dev, or fast.
-    prompt: Enter your text prompt (e.g., "A photo of an astronaut riding a horse on the moon").
-    resolution: Select from available options (e.g., "1024 × 1024 (Square)").
-    seed: Set a random seed.
-    override_steps and override_cfg: Optionally override default steps and guidance scale.
-- Connect the output to a PreviewImage or SaveImage node.
+ComfyUI Nodes
+HiDream Sampler provides three nodes for different workflows:
+
+### 1. HiDream Sampler (Basic) 
+**Simple text-to-image generation with a single prompt.**
+
+Inputs:
+   model_type: Choose model variant (fast, dev, full or their NF4 counterparts)
+   prompt: Text description of your desired image
+   negative_prompt: Elements to avoid in the image
+   aspect_ratio: Select from preset aspect ratios (1:1, 16:9, etc.)
+   seed: Random seed for reproducible results
+   scheduler: Sampling method (Default, UniPC, Euler, etc.)
+   override_steps: Custom number of sampling steps (-1 to use model default)
+   override_cfg: Custom guidance scale (-1.0 to use model default)
+   use_uncensored_llm: Toggle for less filtered language model responses
+
+### 2. HiDream Sampler (Advanced) 
+**Fine-grained control over every encoder and generation parameter.**
+
+Inputs:
+   All inputs from basic sampler, plus:
+   Encoder-specific prompts:
+   clip_l_prompt: Text for CLIP-L encoder
+   openclip_prompt: Text for OpenCLIP encoder
+   t5_prompt: Text for T5 encoder
+   llama_prompt: Text for Llama encoder
+   llm_system_prompt: System instruction for Llama LLM
+   Encoder weights: Control influence of each encoder (clip_l_weight, openclip_weight, t5_weight, llama_weight)
+   Resolution controls: square_resolution or custom_width/height
+   Sequence length controls: max_length parameters for each encoder
+
+### 3. HiDream Image to Image
+**Transform existing images using HiDream models.**
+
+Inputs:
+   All inputs from basic sampler, plus:
+   image: Input image to transform
+   denoising_strength: How much to change from input (0.0=no change, 1.0=complete change)
+   Encoder weights: Available to control influence (like in Advanced sampler)
+   Example Workflow
+   Add the appropriate HiDream node to your workflow
+   Configure inputs based on your needs:
+   For text-to-image: Enter a detailed prompt
+   For image-to-image: Connect an image and set denoising_strength (recommended: 0.7-0.8)
+   Connect the output to a PreviewImage or SaveImage node
+   Execute and enjoy your results!
+
+### Tips
+   NF4 models run better on lower VRAM but require specific dependencies
+   Best results come from detailed, descriptive prompts
+   For Windows users: Requires PyTorch 2.1.0+ for NF4 models
+   Experiment with encoder weights in Advanced mode to emphasize different aspects
 
 ## Requirements
 - ComfyUI
 - CUDA-enabled GPU (for model inference)
 
-## Notes
-Models are cached after the first load to improve performance and use 4-bit quantization.
-Ensure you have sufficient VRAM (e.g., 12GB+ recommended for full mode).

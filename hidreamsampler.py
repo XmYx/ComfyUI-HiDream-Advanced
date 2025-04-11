@@ -16,6 +16,17 @@ import gc
 import os # For checking paths if needed
 import huggingface_hub
 from safetensors.torch import load_file
+# --- Check for Transformers version issues
+# Add after imports
+try:
+    from transformers import __version__ as transformers_version
+    import packaging.version
+    if packaging.version.parse(transformers_version) < packaging.version.parse("4.36.0"):
+        print("⚠️ WARNING: Your transformers version is older than 4.36.0 which may cause compatibility issues with NF4 models.")
+        print("⚠️ Consider upgrading with: pip install --upgrade transformers>=4.36.0")
+except ImportError:
+    pass  # Skip version check if packaging module not available
+
 # --- Optional Dependency Handling ---
 try:
     import flash_attn

@@ -16,7 +16,43 @@ import gc
 import os # For checking paths if needed
 import huggingface_hub
 from safetensors.torch import load_file
-# --- Optional Dependency Handling ---
+
+# --- Check for Torch and Transformers version issues
+try:
+    import packaging.version
+    import torch
+    import transformers
+    
+    torch_version = torch.__version__
+    transformers_version = transformers.__version__
+    
+    if packaging.version.parse(torch_version) < packaging.version.parse("2.1.0"):
+        print("⚠️ WARNING: Your PyTorch version is older than 2.1.0")
+        print("   Windows users may need PyTorch 2.1.0+ for NF4 models")
+        print("   Get the correct version at pytorch.org for your CUDA version")
+    
+    if packaging.version.parse(transformers_version) < packaging.version.parse("4.36.0"):
+        print("⚠️ WARNING: Your transformers version is older than 4.36.0")
+        print("   May have compatibility issues with NF4 models: pip install --upgrade transformers>=4.36.0")
+except (ImportError, AttributeError):
+    pass  # Skip version check if packaging module not available
+
+# --- Attention Implementation Detection ---
+try:
+    import flash_attn
+    flash_attn_available = True
+    print("Flash Attention 2 is available.")
+except ImportError:
+    flash_attn_available = False
+    print("Flash Attention 2 is not available, will use PyTorch's native attention if possible.")
+
+# Check for scaled_dot_product_attention (available in PyTorch 2.0+)
+sdpa_available = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+if sdpa_available:
+    print("PyTorch SDPA (Scaled Dot Product Attention) is available.")
+else:
+    print("PyTorch SDPA not available. Will use eager attention.")
+
 try:
     import accelerate
     accelerate_available = True
@@ -139,8 +175,37 @@ model_dtype = torch.bfloat16
 # (Keep definitions the same)
 available_schedulers = {};
 if hidream_classes_loaded: available_schedulers = {"FlowUniPCMultistepScheduler": FlowUniPCMultistepScheduler, "FlashFlowMatchEulerDiscreteScheduler": FlashFlowMatchEulerDiscreteScheduler}
+
+DEBUG_CACHE = True  # Set to False in production
+
+# Use a more aggressive global cleanup
+def global_cleanup():
+    """Global cleanup function for use with multiple HiDream nodes"""
+    print("HiDream: Performing global cleanup...")
+    
+    # Clear any pending operations
+    torch.cuda.synchronize()
+    
+    # Get current memory stats
+    if torch.cuda.is_available():
+        before_mem = torch.cuda.memory_allocated() / 1024**2
+        print(f"  Memory before cleanup: {before_mem:.2f} MB")
+    
+    # Perform HiDreamSampler cleanup
+    HiDreamSampler.cleanup_models()
+    
+    # Additional cleanup
+    gc.collect()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        after_mem = torch.cuda.memory_allocated() / 1024**2
+        print(f"  Memory after cleanup: {after_mem:.2f} MB")
+    
+    return True
+
 # --- Helper: Get Scheduler Instance ---
-# (Keep function the same)
 def get_scheduler_instance(scheduler_name, shift_value):
     if not available_schedulers: raise RuntimeError("No schedulers available...")
     scheduler_class = available_schedulers.get(scheduler_name)
@@ -160,9 +225,28 @@ def load_models(model_type, use_uncensored_llm=False):
     print(f"NF4: {is_nf4}, Requires BNB: {requires_bnb}, Requires GPTQ deps: {requires_gptq_deps}")
     print(f"Using Uncensored LLM: {use_uncensored_llm}")
     start_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"(Start VRAM: {start_mem:.2f} MB)")
+
+    # Create a standardized cache key used by all nodes
+    cache_key = f"{model_type}_{'uncensored' if use_uncensored_llm else 'standard'}"
+    
+    # Check cache with debug info
+    if DEBUG_CACHE:
+        print(f"Cache check for key: {cache_key}")
+        print(f"Cache contains: {list(HiDreamSampler._model_cache.keys())}")
+    
+    if cache_key in HiDreamSampler._model_cache:
+        pipe, stored_config = HiDreamSampler._model_cache[cache_key]
+        if pipe is not None and hasattr(pipe, 'transformer') and pipe.transformer is not None:
+            print(f"Using cached model for {cache_key}")
+            return pipe, MODEL_CONFIGS[model_type]  # Always return original config dict
+        else:
+            print(f"Cache entry invalid for {cache_key}, reloading")
+            # Remove from cache to avoid reusing
+            HiDreamSampler._model_cache.pop(cache_key, None)
+
     
     # --- 1. Load LLM (Conditional) ---
-    text_encoder_load_kwargs = {"output_hidden_states": True, "low_cpu_mem_usage": True, "torch_dtype": model_dtype,}
+    text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}
     
     if is_nf4:
         # Choose uncensored model if requested, but keep loading process identical
@@ -197,9 +281,40 @@ def load_models(model_type, use_uncensored_llm=False):
         # Rest of standard model loading stays exactly the same
         if bnb_llm_config: text_encoder_load_kwargs["quantization_config"] = bnb_llm_config; print("     Using 4-bit BNB.")
         else: raise ImportError("BNB config required for standard LLM.")
-        text_encoder_load_kwargs["attn_implementation"] = "flash_attention_2" if hasattr(torch.nn.functional, 'scaled_dot_product_attention') else "eager"
+        # Determine the best available attention implementation
+        if flash_attn_available:
+            text_encoder_load_kwargs["attn_implementation"] = "flash_attention_2"
+            print("     Using Flash Attention 2.")
+        elif sdpa_available:
+            text_encoder_load_kwargs["attn_implementation"] = "sdpa"
+            print("     Using PyTorch SDPA attention.")
+        else:
+            text_encoder_load_kwargs["attn_implementation"] = "eager"
+            print("     Using standard eager attention.")
     
     print(f"[1b] Loading Tokenizer: {llama_model_name}..."); tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False); print("     Tokenizer loaded.")
+
+    if is_nf4:
+        # More aggressive RoPE scaling fix
+        try:
+            # Direct fix: Load and completely replace the config
+            from transformers import AutoConfig
+            
+            # Load the config and make a deep copy we can modify
+            config = AutoConfig.from_pretrained(llama_model_name)
+            
+            # Completely replace the rope_scaling with a known good config
+            config.rope_scaling = {"type": "linear", "factor": 1.0}
+            print(f"     ✅ Fixed rope_scaling to: {config.rope_scaling}")
+            
+            # Force using our fixed config
+            text_encoder_load_kwargs["config"] = config
+            
+            # Disable all validation for good measure
+            text_encoder_load_kwargs["low_cpu_mem_usage"] = True
+        except Exception as e:
+            print(f"     ⚠️ Failed to patch config: {e}")
+    
     print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)"); text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
     if "device_map" not in text_encoder_load_kwargs: print("     Moving text encoder to CUDA..."); text_encoder.to("cuda")
     step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
@@ -236,7 +351,7 @@ def load_models(model_type, use_uncensored_llm=False):
             except Exception as e: print(f"     ⚠️ Failed CPU offload: {e}")
         else: print("     ⚠️ enable_sequential_cpu_offload() not found.")
     final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
-    return pipe, config
+    return pipe, MODEL_CONFIGS[model_type]
     
 # --- Resolution Parsing & Tensor Conversion ---
 RESOLUTION_OPTIONS = [ # (Keep list the same)
@@ -325,7 +440,7 @@ class HiDreamSampler:
         for key in keys_to_del:
             print(f"  Removing '{key}'...")
             try:
-                pipe_to_del, _= cls._model_cache.pop(key)
+                pipe_to_del, _ = cls._model_cache.pop(key)
                 # More aggressive cleanup - clear all major components
                 if hasattr(pipe_to_del, 'transformer'):
                     pipe_to_del.transformer = None
@@ -473,7 +588,8 @@ class HiDreamSampler:
             print("CRITICAL ERROR: Load failed.")
             return (torch.zeros((1, 512, 512, 3)),)
         # --- Update scheduler if requested ---
-        original_scheduler_class = config["scheduler_class"]
+        txt2img_pipe, model_config = load_models(model_type, use_uncensored_llm)
+        original_scheduler_class = model_config["scheduler_class"]
         original_shift = config["shift"]
         if scheduler != "Default for model":
             print(f"Replacing default scheduler ({original_scheduler_class}) with: {scheduler}")
@@ -585,9 +701,9 @@ class HiDreamSampler:
                 print("ERROR: pil2tensor returned None. Creating blank image.")
                 return (torch.zeros((1, height, width, 3)),)
                 
-            # Fix for bfloat16 tensor issue
-            if output_tensor.dtype == torch.bfloat16:
-                print("Converting bfloat16 tensor to float32 for ComfyUI compatibility")
+            # Fix for any non-float32 tensor issue
+            if output_tensor.dtype != torch.float32:
+                print(f"Converting {output_tensor.dtype} tensor to float32 for ComfyUI compatibility")
                 output_tensor = output_tensor.to(torch.float32)
                 
             # Verify tensor shape is valid
@@ -984,8 +1100,9 @@ class HiDreamSamplerAdvanced:
 
 
 class HiDreamImg2Img:
-    _model_cache = {}  # Separate cache for img2img pipelines
-    cleanup_models = HiDreamSampler.cleanup_models  # Reuse cleanup method
+    _model_cache = HiDreamSampler._model_cache
+    cleanup_models = HiDreamSampler.cleanup_models
+    
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "generate"

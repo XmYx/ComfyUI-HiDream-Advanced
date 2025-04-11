@@ -1032,12 +1032,103 @@ class HiDreamImg2Img:
                 "llama_weight": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
             }
         }
+
+    def preprocess_image(self, image, target_height=None, target_width=None):
+        """Resize and possibly crop input image to match model requirements."""
+        import torch.nn.functional as F
+        import math
+        
+        # Get original dimensions
+        _, orig_h, orig_w, _ = image.shape
+        orig_aspect = orig_w / orig_h
+        
+        print(f"Original image dimensions: {orig_w}x{orig_h}, aspect ratio: {orig_aspect:.3f}")
+        
+        # If no target size provided, find closest standard resolution
+        if target_height is None or target_width is None:
+            # Define standard resolutions (must be divisible by 16)
+            standard_resolutions = [
+                (1024, 1024),  # 1:1
+                (768, 1360),   # 9:16 (portrait)
+                (1360, 768),   # 16:9 (landscape)
+                (880, 1168),   # 3:4 (portrait)
+                (1168, 880),   # 4:3 (landscape)
+                (832, 1248),   # 2:3 (portrait)
+                (1248, 832),   # 3:2 (landscape)
+            ]
+            
+            # Find closest aspect ratio
+            best_diff = float('inf')
+            target_width, target_height = standard_resolutions[0]  # Default to square
+            
+            for w, h in standard_resolutions:
+                res_aspect = w / h
+                diff = abs(res_aspect - orig_aspect)
+                if diff < best_diff:
+                    best_diff = diff
+                    target_width, target_height = w, h
+            
+            print(f"Selected target resolution: {target_width}x{target_height}")
+        
+        # Ensure dimensions are divisible by 16
+        target_width = (target_width // 16) * 16
+        target_height = (target_height // 16) * 16
+        
+        # Convert to format expected by F.interpolate [B,C,H,W]
+        # ComfyUI typically uses [B,H,W,C]
+        x = image.permute(0, 3, 1, 2)
+        
+        # Calculate resize dimensions preserving aspect ratio
+        if orig_aspect > target_width / target_height:  # Image is wider
+            new_w = target_width
+            new_h = int(new_w / orig_aspect)
+            new_h = (new_h // 16) * 16  # Make divisible by 16
+        else:  # Image is taller
+            new_h = target_height
+            new_w = int(new_h * orig_aspect)
+            new_w = (new_w // 16) * 16  # Make divisible by 16
+        
+        # Resize to preserve aspect ratio
+        x_resized = F.interpolate(x, size=(new_h, new_w), mode='bicubic', align_corners=False)
+        
+        # Create target tensor with correct dimensions
+        x_result = torch.zeros(1, 3, target_height, target_width, device=x.device, dtype=x.dtype)
+        
+        # Calculate position for center crop
+        y_offset = max(0, (new_h - target_height) // 2)
+        x_offset = max(0, (new_w - target_width) // 2)
+        
+        # Calculate how much to copy
+        height_to_copy = min(new_h, target_height)
+        width_to_copy = min(new_w, target_width)
+        
+        # Place the resized image in the center of the target tensor
+        target_y_offset = max(0, (target_height - height_to_copy) // 2)
+        target_x_offset = max(0, (target_width - width_to_copy) // 2)
+        
+        x_result[:, :, 
+                 target_y_offset:target_y_offset+height_to_copy, 
+                 target_x_offset:target_x_offset+width_to_copy] = x_resized[:, :, 
+                                                                           y_offset:y_offset+height_to_copy, 
+                                                                           x_offset:x_offset+width_to_copy]
+        
+        print(f"Processed to: {target_width}x{target_height} (divisible by 16)")
+        
+        # Convert back to ComfyUI format [B,H,W,C]
+        return x_result.permute(0, 2, 3, 1)
     
     def generate(self, model_type, image, denoising_strength, prompt, negative_prompt, 
-                 seed, scheduler, override_steps, override_cfg, use_uncensored_llm=False,
-                 llm_system_prompt="You are a creative AI assistant...",
-                 clip_l_weight=1.0, openclip_weight=1.0, t5_weight=1.0, llama_weight=1.0, **kwargs):
+             seed, scheduler, override_steps, override_cfg, use_uncensored_llm=False,
+             llm_system_prompt="You are a creative AI assistant...",
+             clip_l_weight=1.0, openclip_weight=1.0, t5_weight=1.0, llama_weight=1.0, **kwargs):
+
+
+        # Preprocess the input image to ensure compatible dimensions
+        processed_image = self.preprocess_image(image)
         
+        # Get dimensions from processed image for the output
+        _, height, width, _ = processed_image.shape
+                 
         # Monitor initial memory usage
         if torch.cuda.is_available():
             initial_mem = torch.cuda.memory_allocated() / 1024**2
@@ -1221,7 +1312,7 @@ class HiDreamImg2Img:
                     num_inference_steps=num_inference_steps,
                     num_images_per_prompt=1,
                     generator=generator,
-                    init_image=image,
+                    init_image=processed_image,
                     denoising_strength=denoising_strength,
                     llm_system_prompt=llm_system_prompt,
                     clip_l_scale=clip_l_weight,

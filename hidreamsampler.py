@@ -18,6 +18,21 @@ import huggingface_hub
 from safetensors.torch import load_file
 # --- Optional Dependency Handling ---
 try:
+    import flash_attn
+    flash_attn_available = True
+    print("Flash Attention 2 is available.")
+except ImportError:
+    flash_attn_available = False
+    print("Flash Attention 2 is not available, will use PyTorch's native attention if possible.")
+
+# Check for scaled_dot_product_attention (available in PyTorch 2.0+)
+sdpa_available = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+if sdpa_available:
+    print("PyTorch SDPA (Scaled Dot Product Attention) is available.")
+else:
+    print("PyTorch SDPA not available. Will use eager attention.")
+
+try:
     import accelerate
     accelerate_available = True
 except ImportError:
@@ -197,7 +212,16 @@ def load_models(model_type, use_uncensored_llm=False):
         # Rest of standard model loading stays exactly the same
         if bnb_llm_config: text_encoder_load_kwargs["quantization_config"] = bnb_llm_config; print("     Using 4-bit BNB.")
         else: raise ImportError("BNB config required for standard LLM.")
-        text_encoder_load_kwargs["attn_implementation"] = "flash_attention_2" if hasattr(torch.nn.functional, 'scaled_dot_product_attention') else "eager"
+        # Determine the best available attention implementation
+        if flash_attn_available:
+            text_encoder_load_kwargs["attn_implementation"] = "flash_attention_2"
+            print("     Using Flash Attention 2.")
+        elif sdpa_available:
+            text_encoder_load_kwargs["attn_implementation"] = "sdpa"
+            print("     Using PyTorch SDPA attention.")
+        else:
+            text_encoder_load_kwargs["attn_implementation"] = "eager"
+            print("     Using standard eager attention.")
     
     print(f"[1b] Loading Tokenizer: {llama_model_name}..."); tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False); print("     Tokenizer loaded.")
     print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)"); text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)

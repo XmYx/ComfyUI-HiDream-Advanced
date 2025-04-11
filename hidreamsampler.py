@@ -303,7 +303,7 @@ def load_models(model_type, use_uncensored_llm=False):
             except Exception as e: print(f"     ⚠️ Failed CPU offload: {e}")
         else: print("     ⚠️ enable_sequential_cpu_offload() not found.")
     final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
-    return pipe, config
+    return pipe, MODEL_CONFIGS[model_type]
     
 # --- Resolution Parsing & Tensor Conversion ---
 RESOLUTION_OPTIONS = [ # (Keep list the same)
@@ -540,7 +540,8 @@ class HiDreamSampler:
             print("CRITICAL ERROR: Load failed.")
             return (torch.zeros((1, 512, 512, 3)),)
         # --- Update scheduler if requested ---
-        original_scheduler_class = config["scheduler_class"]
+        txt2img_pipe, model_config = load_models(model_type, use_uncensored_llm)
+        original_scheduler_class = model_config["scheduler_class"]
         original_shift = config["shift"]
         if scheduler != "Default for model":
             print(f"Replacing default scheduler ({original_scheduler_class}) with: {scheduler}")

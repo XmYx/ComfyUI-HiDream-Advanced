@@ -1,7 +1,7 @@
 # Core dependencies
-transformers>=4.36.0  # Note: Older versions may have issues with NF4 models. If you see RoPE scaling errors, upgrade with: pip install --upgrade transformers>=4.36.0
+transformers>=4.36.0  # Older versions have RoPE scaling errors with NF4 models - upgrade if needed: pip install --upgrade transformers>=4.36.0
 diffusers>=0.26.0
-torch>=2.0.0
+torch>=2.0.0  # For Windows with NF4 models, PyTorch 2.1.0+ is recommended - get correct version at pytorch.org for your CUDA version
 numpy>=1.24.0
 Pillow>=10.0.0
 # For standard (BNB) models

@@ -175,8 +175,37 @@ model_dtype = torch.bfloat16
 # (Keep definitions the same)
 available_schedulers = {};
 if hidream_classes_loaded: available_schedulers = {"FlowUniPCMultistepScheduler": FlowUniPCMultistepScheduler, "FlashFlowMatchEulerDiscreteScheduler": FlashFlowMatchEulerDiscreteScheduler}
+
+DEBUG_CACHE = True  # Set to False in production
+
+# Use a more aggressive global cleanup
+def global_cleanup():
+    """Global cleanup function for use with multiple HiDream nodes"""
+    print("HiDream: Performing global cleanup...")
+    
+    # Clear any pending operations
+    torch.cuda.synchronize()
+    
+    # Get current memory stats
+    if torch.cuda.is_available():
+        before_mem = torch.cuda.memory_allocated() / 1024**2
+        print(f"  Memory before cleanup: {before_mem:.2f} MB")
+    
+    # Perform HiDreamSampler cleanup
+    HiDreamSampler.cleanup_models()
+    
+    # Additional cleanup
+    gc.collect()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+        after_mem = torch.cuda.memory_allocated() / 1024**2
+        print(f"  Memory after cleanup: {after_mem:.2f} MB")
+    
+    return True
+
 # --- Helper: Get Scheduler Instance ---
-# (Keep function the same)
 def get_scheduler_instance(scheduler_name, shift_value):
     if not available_schedulers: raise RuntimeError("No schedulers available...")
     scheduler_class = available_schedulers.get(scheduler_name)
@@ -196,6 +225,25 @@ def load_models(model_type, use_uncensored_llm=False):
     print(f"NF4: {is_nf4}, Requires BNB: {requires_bnb}, Requires GPTQ deps: {requires_gptq_deps}")
     print(f"Using Uncensored LLM: {use_uncensored_llm}")
     start_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"(Start VRAM: {start_mem:.2f} MB)")
+
+    # Create a standardized cache key used by all nodes
+    cache_key = f"{model_type}_{'uncensored' if use_uncensored_llm else 'standard'}"
+    
+    # Check cache with debug info
+    if DEBUG_CACHE:
+        print(f"Cache check for key: {cache_key}")
+        print(f"Cache contains: {list(HiDreamSampler._model_cache.keys())}")
+    
+    if cache_key in HiDreamSampler._model_cache:
+        pipe, stored_config = HiDreamSampler._model_cache[cache_key]
+        if pipe is not None and hasattr(pipe, 'transformer') and pipe.transformer is not None:
+            print(f"Using cached model for {cache_key}")
+            return pipe, MODEL_CONFIGS[model_type]  # Always return original config dict
+        else:
+            print(f"Cache entry invalid for {cache_key}, reloading")
+            # Remove from cache to avoid reusing
+            HiDreamSampler._model_cache.pop(cache_key, None)
+
     
     # --- 1. Load LLM (Conditional) ---
     text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}

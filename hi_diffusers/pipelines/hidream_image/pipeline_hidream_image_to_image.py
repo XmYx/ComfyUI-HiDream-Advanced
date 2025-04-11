@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from .pipeline_hidream_image import HiDreamImagePipeline, calculate_shift, retrieve_timesteps
 from .pipeline_output import HiDreamImagePipelineOutput
 from ...schedulers.fm_solvers_unipc import FlowUniPCMultistepScheduler
+from ...schedulers.flash_flow_match import FlashFlowMatchEulerDiscreteScheduler
 from diffusers.utils import is_torch_xla_available
 
 if is_torch_xla_available():
@@ -212,11 +213,30 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
                 timesteps = timesteps[start_step:]
                 print(f"Starting denoising from step {start_step}/{num_inference_steps} (strength: {denoising_strength})")
                 
-                # Direct noise interpolation for Flow Matching models
+                # Create noise
                 noise = torch.randn(latents.shape, dtype=latents.dtype, device=device, generator=generator)
-                # Interpolate between original latents and noise based on denoising strength
-                latents = (1.0 - denoising_strength) * latents + denoising_strength * noise
-                print(f"Applied noise interpolation with strength: {denoising_strength}")
+                
+                # Get starting timestep
+                t_start = timesteps[0].unsqueeze(0)
+                
+                # Set the scheduler's step index for proper noise scaling
+                self.scheduler._step_index = start_step
+                
+                # Apply noise using the appropriate scheduler method
+                if isinstance(self.scheduler, FlowUniPCMultistepScheduler):
+                    print(f"Using UniPC add_noise with timestep {t_start}")
+                    latents = self.scheduler.add_noise(
+                        original_samples=latents,
+                        noise=noise,
+                        timesteps=t_start
+                    )
+                else:  # FlashFlowMatchEulerDiscreteScheduler or variants
+                    print(f"Using FlashFlow scale_noise with timestep {t_start}")
+                    latents = self.scheduler.scale_noise(
+                        sample=latents,
+                        timestep=t_start,
+                        noise=noise
+                    )
         
         # Denoising loop
         num_warmup_steps = max(len(timesteps) - num_inference_steps * self.scheduler.order, 0)

@@ -1,5 +1,5 @@
 # Core dependencies
-transformers>=4.36.0
+transformers>=4.36.0  # Note: Older versions may have issues with NF4 models. If you see RoPE scaling errors, upgrade with: pip install --upgrade transformers>=4.36.0
 diffusers>=0.26.0
 torch>=2.0.0
 numpy>=1.24.0

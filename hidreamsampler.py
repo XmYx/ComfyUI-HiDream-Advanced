@@ -216,15 +216,22 @@ def load_models(model_type, use_uncensored_llm=False):
     if not hidream_classes_loaded: raise ImportError("Cannot load models: HiDream classes failed to import.")
     if model_type not in MODEL_CONFIGS: raise ValueError(f"Unknown or incompatible model_type: {model_type}")
     config = MODEL_CONFIGS[model_type]
-    model_path = config["path"]; is_nf4 = config.get("is_nf4", False)
-    scheduler_name = config["scheduler_class"]; shift = config["shift"]
-    requires_bnb = config.get("requires_bnb", False); requires_gptq_deps = config.get("requires_gptq_deps", False)
+    model_path = config["path"]
+    is_nf4 = config.get("is_nf4", False)
+    scheduler_name = config["scheduler_class"]
+    shift = config["shift"]
+    requires_bnb = config.get("requires_bnb", False)
+    requires_gptq_deps = config.get("requires_gptq_deps", False)
+    
     if requires_bnb and not bnb_available: raise ImportError(f"Model '{model_type}' requires BitsAndBytes...")
     if requires_gptq_deps and (not optimum_available or not autogptq_available): raise ImportError(f"Model '{model_type}' requires Optimum & AutoGPTQ...")
-    print(f"--- Loading Model Type: {model_type} ---"); print(f"Model Path: {model_path}")
+    
+    print(f"--- Loading Model Type: {model_type} ---")
+    print(f"Model Path: {model_path}")
     print(f"NF4: {is_nf4}, Requires BNB: {requires_bnb}, Requires GPTQ deps: {requires_gptq_deps}")
     print(f"Using Uncensored LLM: {use_uncensored_llm}")
-    start_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"(Start VRAM: {start_mem:.2f} MB)")
+    start_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+    print(f"(Start VRAM: {start_mem:.2f} MB)")
 
     # Create a standardized cache key used by all nodes
     cache_key = f"{model_type}_{'uncensored' if use_uncensored_llm else 'standard'}"
@@ -245,97 +252,43 @@ def load_models(model_type, use_uncensored_llm=False):
             HiDreamSampler._model_cache.pop(cache_key, None)
     
     # --- 1. Load LLM (Conditional) ---
-    text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}
-    use_auto_model = False  # Initialize use_auto_model flag
-    skip_further_transforms = False  # Initialize skip_further_transforms flag
+    # Simplified kwargs that don't try to modify the model's internals
+    text_encoder_load_kwargs = {
+        "output_hidden_states": True,
+        "low_cpu_mem_usage": True,
+        "torch_dtype": model_dtype
+    }
     
     if is_nf4:
+        # For NF4 models
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_NF4_LLAMA_MODEL_NAME
-            print(f"\n[1a] Preparing Uncensored LLM (NF4): {llama_model_name}")
-    
-            # Check if this is the Lexi model or GPTQ model which needs special handling
-            if "Lexi-Uncensored" in llama_model_name:
-                print("     Using special handling for Lexi Uncensored model (BitsAndBytes NF4)")
-                try:
-                    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-                    
-                    # Create BitsAndBytes config matching the Lexi model's config.json
-                    bnb_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_quant_type="nf4",
-                        bnb_4bit_compute_dtype=torch.bfloat16, # Explicitly match config
-                        bnb_4bit_use_double_quant=True,     # Explicitly match config
-                    )
-                    
-                    # Configure kwargs specifically for Lexi/BNB NF4
-                    text_encoder_load_kwargs = {
-                        "quantization_config": bnb_config,
-                        "device_map": "auto", # Keep device_map for BNB+accelerate
-                        "torch_dtype": torch.bfloat16,
-                        # Removed low_cpu_mem_usage
-                    }
-                    print("     Using AutoModelForCausalLM with specific BitsAndBytes config and device_map='auto'.")
-                    use_auto_model = True # Set flag to use AutoModel
-                
-                except ImportError as e:
-                    print(f"     ERROR: Could not import necessary components for BitsAndBytes: {e}")
-                    raise ImportError("BitsAndBytes setup failed for Lexi model.") # Stop if BNB fails
-                except Exception as e:
-                     print(f"     ERROR: Failed to set up BitsAndBytes config: {e}")
-                     raise e # Stop on other errors
-            elif "GPTQ" in llama_model_name or "gptq" in llama_model_name:
-                print("     Using special handling for GPTQ model")
-                try:
-                    from transformers import AutoModelForCausalLM
-                    
-                    # Special handling for GPTQ - WITHOUT quantization_config
-                    # This is the key fix - don't try to further quantize a GPTQ model
-                    text_encoder_load_kwargs = {
-                        "device_map": "auto" if accelerate_available else None,
-                        "torch_dtype": torch.float16,  # Use float16 instead of bfloat16 for GPTQ
-                    }
-                    
-                    print("     Using AutoModelForCausalLM with GPTQ-specific settings (no quantization_config)")
-                    use_auto_model = True
-                    
-                    # Important: skip applying rope_scaling and other transforms later
-                    skip_further_transforms = True
-                    
-                except ImportError as e:
-                    print(f"     ERROR: Could not import necessary components: {e}")
-                    raise ImportError("Failed to set up for GPTQ model.")
-                except Exception as e:
-                    print(f"     ERROR: Failed to set up config: {e}")
-                    raise e
         else:
             llama_model_name = NF4_LLAMA_MODEL_NAME
-            print(f"\n[1a] Preparing LLM (GPTQ): {llama_model_name}")
-            use_auto_model = False
-            # Standard GPTQ setup
-            if accelerate_available:
-                # Fix for device format - use integer instead of cuda:0
-                if hasattr(torch.cuda, 'get_device_properties') and torch.cuda.is_available():
-                    total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                    # Use 40% for model, leaving room for the transformer
-                    max_mem = int(total_mem * 0.4)
-                    text_encoder_load_kwargs["max_memory"] = {0: f"{max_mem}GiB"}
-                    print(f"     Setting max memory limit: {max_mem}GiB of {total_mem:.1f}GiB")
-                text_encoder_load_kwargs["device_map"] = "auto";
-                print("     Using device_map='auto'.")
-            else: print("     accelerate not found, attempting manual placement.")
+        print(f"\n[1a] Preparing LLM (NF4): {llama_model_name}")
+        
+        # Simple device mapping for NF4 models
+        if accelerate_available:
+            text_encoder_load_kwargs["device_map"] = "auto"
+            print("     Using device_map='auto'.")
+        else:
+            print("     accelerate not found, attempting manual placement.")
     else:
-        # For non-NF4 models, choose uncensored if requested
+        # For non-NF4 models
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_LLAMA_MODEL_NAME
-            print(f"\n[1a] Preparing Uncensored LLM (4-bit BNB): {llama_model_name}")
         else:
             llama_model_name = ORIGINAL_LLAMA_MODEL_NAME
-            print(f"\n[1a] Preparing LLM (4-bit BNB): {llama_model_name}")
-        # Rest of standard model loading stays exactly the same
-        if bnb_llm_config: text_encoder_load_kwargs["quantization_config"] = bnb_llm_config; print("     Using 4-bit BNB.")
-        else: raise ImportError("BNB config required for standard LLM.")
-        # Determine the best available attention implementation
+        print(f"\n[1a] Preparing LLM (4-bit BNB): {llama_model_name}")
+        
+        # Only apply BNB to non-NF4 models
+        if bnb_llm_config:
+            text_encoder_load_kwargs["quantization_config"] = bnb_llm_config
+            print("     Using 4-bit BNB.")
+        else:
+            raise ImportError("BNB config required for standard LLM.")
+        
+        # Set attention implementation based on availability
         if flash_attn_available:
             text_encoder_load_kwargs["attn_implementation"] = "flash_attention_2"
             print("     Using Flash Attention 2.")
@@ -345,108 +298,42 @@ def load_models(model_type, use_uncensored_llm=False):
         else:
             text_encoder_load_kwargs["attn_implementation"] = "eager"
             print("     Using standard eager attention.")
-        use_auto_model = False
     
-    print(f"[1b] Loading Tokenizer: {llama_model_name}..."); 
-    tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False); 
+    # --- Load tokenizer and text encoder ---
+    print(f"[1b] Loading Tokenizer: {llama_model_name}...")
+    tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False)
     print("     Tokenizer loaded.")
     
-    if is_nf4:
-        # Skip for GPTQ models (they already have their own RoPE config)
-        if skip_further_transforms or (use_uncensored_llm and ("GPTQ" in llama_model_name or "gptq" in llama_model_name)):
-            print("     ⚠️ Skipping RoPE scaling fix for GPTQ model")
-        else:
-            # More aggressive RoPE scaling fix for other models
-            try:
-                # Direct fix: Load and completely replace the config
-                from transformers import AutoConfig
-                # Load the config and make a deep copy we can modify
-                # IMPORTANT: Use the config associated with the *selected* llama_model_name
-                loaded_config = AutoConfig.from_pretrained(llama_model_name)
-                # Completely replace the rope_scaling with a known good config
-                loaded_config.rope_scaling = {"type": "linear", "factor": 1.0}
-                print(f"     ✅ Fixed rope_scaling to: {loaded_config.rope_scaling}")
-                # Force using our fixed config
-                # This might override quantization_config if not careful,
-                # so we only add it if it's not the Lexi case where we handle kwargs separately
-                if not (use_uncensored_llm and "Lexi-Uncensored" in llama_model_name):
-                     text_encoder_load_kwargs["config"] = loaded_config
-        
-            except Exception as e:
-                print(f"     ⚠️ Failed to patch config: {e}")
-    
-    # --- Text Encoder Loading (outside the if/else) ---
     print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
-    if use_auto_model:
-        # For specially handled models (Lexi or GPTQ), use AutoModelForCausalLM
-        from transformers import AutoModelForCausalLM
-        
-        if "GPTQ" in llama_model_name or "gptq" in llama_model_name:
-            # For GPTQ models, try optimum.gptq first if available
-            if optimum_available and autogptq_available:
-                try:
-                    print("     Trying optimum.gptq for loading GPTQ model...")
-                    from optimum.gptq import GPTQModelForCausalLM
-                    
-                    text_encoder = GPTQModelForCausalLM.from_quantized(
-                        llama_model_name,
-                        device_map=text_encoder_load_kwargs.get("device_map"),
-                        torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
-                    )
-                    print("     Successfully loaded with optimum.gptq")
-                except Exception as e:
-                    print(f"     optimum.gptq failed: {e}, falling back to AutoModelForCausalLM")
-                    text_encoder = AutoModelForCausalLM.from_pretrained(
-                        llama_model_name,
-                        device_map=text_encoder_load_kwargs.get("device_map"),
-                        torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
-                    )
-            else:
-                # If optimum not available, use AutoModelForCausalLM directly
-                print("     Loading GPTQ model with AutoModelForCausalLM...")
-                text_encoder = AutoModelForCausalLM.from_pretrained(
-                    llama_model_name,
-                    device_map=text_encoder_load_kwargs.get("device_map"),
-                    torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
-                )
-            print(f"     Using AutoModelForCausalLM for GPTQ model")
-        else:
-            # For Lexi model, use AutoModelForCausalLM with specific args
-            text_encoder = AutoModelForCausalLM.from_pretrained(
-                llama_model_name,
-                quantization_config=text_encoder_load_kwargs.get("quantization_config"),
-                device_map=text_encoder_load_kwargs.get("device_map"),
-                torch_dtype=text_encoder_load_kwargs.get("torch_dtype")
-            )
-            print("     Using AutoModelForCausalLM for Lexi model")
-    else:
-        # For all other models, use LlamaForCausalLM with the full kwargs dict
-        text_encoder = LlamaForCausalLM.from_pretrained(
-            llama_model_name,
-            **text_encoder_load_kwargs
-        )
+    # Always use LlamaForCausalLM directly - no AutoModelForCausalLM
+    text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
     
-    if "device_map" not in text_encoder_load_kwargs: 
+    if "device_map" not in text_encoder_load_kwargs:
         print("     Moving text encoder to CUDA...")
         text_encoder.to("cuda")
-        
+    
     step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
     print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
     
     # --- 2. Load Transformer (Conditional) ---
     print(f"\n[2] Preparing Transformer from: {model_path}")
     transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
-    if is_nf4: print("     Type: NF4")
-    else: # Default BNB case
+    
+    if is_nf4:
+        print("     Type: NF4")
+    else:
         print("     Type: Standard (Applying 4-bit BNB quantization)")
         if bnb_transformer_4bit_config:
             transformer_load_kwargs["quantization_config"] = bnb_transformer_4bit_config
         else:
             raise ImportError("BNB config required for transformer but unavailable.")
-    print("     Loading Transformer... (May download files)") 
+    
+    print("     Loading Transformer... (May download files)")
     transformer = HiDreamImageTransformer2DModel.from_pretrained(model_path, **transformer_load_kwargs)
+    
     print("     Moving Transformer to CUDA...")
     transformer.to("cuda")
+    
     step2_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
     print(f"✅ Transformer loaded! (VRAM: {step2_mem:.2f} MB)")
     
@@ -459,12 +346,12 @@ def load_models(model_type, use_uncensored_llm=False):
     print(f"\n[4] Loading Pipeline from: {model_path}")
     print("     Passing pre-loaded components...")
     pipe = HiDreamImagePipeline.from_pretrained(
-        model_path, 
-        scheduler=scheduler, 
-        tokenizer_4=tokenizer, 
-        text_encoder_4=text_encoder, 
-        transformer=None, 
-        torch_dtype=model_dtype, 
+        model_path,
+        scheduler=scheduler,
+        tokenizer_4=tokenizer,
+        text_encoder_4=text_encoder,
+        transformer=None,
+        torch_dtype=model_dtype,
         low_cpu_mem_usage=True
     )
     print("     Pipeline structure loaded.")
@@ -473,21 +360,22 @@ def load_models(model_type, use_uncensored_llm=False):
     print("\n[5] Finalizing Pipeline...")
     print("     Assigning transformer...")
     pipe.transformer = transformer
+    
     print("     Moving pipeline object to CUDA (final check)...")
-    try: 
+    try:
         pipe.to("cuda")
-    except Exception as e: 
+    except Exception as e:
         print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
     
     if is_nf4:
         print("     Attempting CPU offload for NF4...")
         if hasattr(pipe, "enable_sequential_cpu_offload"):
-            try: 
+            try:
                 pipe.enable_sequential_cpu_offload()
                 print("     ✅ CPU offload enabled.")
-            except Exception as e: 
+            except Exception as e:
                 print(f"     ⚠️ Failed CPU offload: {e}")
-        else: 
+        else:
             print("     ⚠️ enable_sequential_cpu_offload() not found.")
     
     final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0

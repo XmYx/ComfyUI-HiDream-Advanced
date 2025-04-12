@@ -252,7 +252,7 @@ def load_models(model_type, use_uncensored_llm=False):
             HiDreamSampler._model_cache.pop(cache_key, None)
     
     # --- 1. Load LLM (Conditional) ---
-    # Simplified kwargs that don't try to modify the model's internals
+    # Use a simple, consistent approach for all models
     text_encoder_load_kwargs = {
         "output_hidden_states": True,
         "low_cpu_mem_usage": True,
@@ -260,14 +260,14 @@ def load_models(model_type, use_uncensored_llm=False):
     }
     
     if is_nf4:
-        # For NF4 models
+        # Simply choose the appropriate model name
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_NF4_LLAMA_MODEL_NAME
         else:
             llama_model_name = NF4_LLAMA_MODEL_NAME
-        print(f"\n[1a] Preparing LLM (NF4): {llama_model_name}")
+        print(f"\n[1a] Preparing LLM: {llama_model_name}")
         
-        # Simple device mapping for NF4 models
+        # Add device_map for NF4 models if accelerate is available
         if accelerate_available:
             text_encoder_load_kwargs["device_map"] = "auto"
             print("     Using device_map='auto'.")
@@ -299,13 +299,13 @@ def load_models(model_type, use_uncensored_llm=False):
             text_encoder_load_kwargs["attn_implementation"] = "eager"
             print("     Using standard eager attention.")
     
-    # --- Load tokenizer and text encoder ---
+    # --- Load tokenizer and text encoder with consistent approach ---
     print(f"[1b] Loading Tokenizer: {llama_model_name}...")
     tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False)
     print("     Tokenizer loaded.")
     
     print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
-    # Always use LlamaForCausalLM directly - no AutoModelForCausalLM
+    # Always use LlamaForCausalLM directly - simple, consistent approach
     text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
     
     if "device_map" not in text_encoder_load_kwargs:

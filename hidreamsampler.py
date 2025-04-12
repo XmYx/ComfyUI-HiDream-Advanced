@@ -415,97 +415,97 @@ def load_models(model_type, use_uncensored_llm=False):
                 print(f"     ⚠️ Failed to patch config: {e}")
     
     # --- Text Encoder Loading (outside the if/else) ---
-print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
-if use_auto_model:
-    # For specially handled models (Lexi or GPTQ), use AutoModelForCausalLM
-    from transformers import AutoModelForCausalLM
-    
-    if "GPTQ" in llama_model_name or "gptq" in llama_model_name:
-        # For GPTQ models, try optimum.gptq first if available
-        if optimum_available and autogptq_available:
-            try:
-                print("     Trying optimum.gptq for loading GPTQ model...")
-                from optimum.gptq import GPTQModelForCausalLM
-                
-                text_encoder = GPTQModelForCausalLM.from_quantized(
-                    llama_model_name,
-                    device_map=text_encoder_load_kwargs.get("device_map"),
-                    torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
-                )
-                print("     Successfully loaded with optimum.gptq")
-            except Exception as e:
-                print(f"     optimum.gptq failed: {e}, falling back to AutoModelForCausalLM")
+    print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
+    if use_auto_model:
+        # For specially handled models (Lexi or GPTQ), use AutoModelForCausalLM
+        from transformers import AutoModelForCausalLM
+        
+        if "GPTQ" in llama_model_name or "gptq" in llama_model_name:
+            # For GPTQ models, try optimum.gptq first if available
+            if optimum_available and autogptq_available:
+                try:
+                    print("     Trying optimum.gptq for loading GPTQ model...")
+                    from optimum.gptq import GPTQModelForCausalLM
+                    
+                    text_encoder = GPTQModelForCausalLM.from_quantized(
+                        llama_model_name,
+                        device_map=text_encoder_load_kwargs.get("device_map"),
+                        torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
+                    )
+                    print("     Successfully loaded with optimum.gptq")
+                except Exception as e:
+                    print(f"     optimum.gptq failed: {e}, falling back to AutoModelForCausalLM")
+                    text_encoder = AutoModelForCausalLM.from_pretrained(
+                        llama_model_name,
+                        device_map=text_encoder_load_kwargs.get("device_map"),
+                        torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
+                    )
+            else:
+                # If optimum not available, use AutoModelForCausalLM directly
+                print("     Loading GPTQ model with AutoModelForCausalLM...")
                 text_encoder = AutoModelForCausalLM.from_pretrained(
                     llama_model_name,
                     device_map=text_encoder_load_kwargs.get("device_map"),
                     torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
                 )
+            print(f"     Using AutoModelForCausalLM for GPTQ model")
         else:
-            # If optimum not available, use AutoModelForCausalLM directly
-            print("     Loading GPTQ model with AutoModelForCausalLM...")
+            # For Lexi model, use AutoModelForCausalLM with specific args
             text_encoder = AutoModelForCausalLM.from_pretrained(
                 llama_model_name,
+                quantization_config=text_encoder_load_kwargs.get("quantization_config"),
                 device_map=text_encoder_load_kwargs.get("device_map"),
-                torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
+                torch_dtype=text_encoder_load_kwargs.get("torch_dtype")
             )
-        print(f"     Using AutoModelForCausalLM for GPTQ model")
+            print("     Using AutoModelForCausalLM for Lexi model")
     else:
-        # For Lexi model, use AutoModelForCausalLM with specific args
-        text_encoder = AutoModelForCausalLM.from_pretrained(
+        # For all other models, use LlamaForCausalLM with the full kwargs dict
+        text_encoder = LlamaForCausalLM.from_pretrained(
             llama_model_name,
-            quantization_config=text_encoder_load_kwargs.get("quantization_config"),
-            device_map=text_encoder_load_kwargs.get("device_map"),
-            torch_dtype=text_encoder_load_kwargs.get("torch_dtype")
+            **text_encoder_load_kwargs
         )
-        print("     Using AutoModelForCausalLM for Lexi model")
-else:
-    # For all other models, use LlamaForCausalLM with the full kwargs dict
-    text_encoder = LlamaForCausalLM.from_pretrained(
-        llama_model_name,
-        **text_encoder_load_kwargs
-    )
-    
-    if "device_map" not in text_encoder_load_kwargs: 
-        print("     Moving text encoder to CUDA...")
-        text_encoder.to("cuda")
         
-    step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
-    print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
-    
-    # --- 2. Load Transformer (Conditional) ---
-    print(f"\n[2] Preparing Transformer from: {model_path}")
-    transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
-    if is_nf4: print("     Type: NF4")
-    else: # Default BNB case
-        print("     Type: Standard (Applying 4-bit BNB quantization)")
-        if bnb_transformer_4bit_config:
-            transformer_load_kwargs["quantization_config"] = bnb_transformer_4bit_config
-        else:
-            raise ImportError("BNB config required for transformer but unavailable.")
-    print("     Loading Transformer... (May download files)"); transformer = HiDreamImageTransformer2DModel.from_pretrained(model_path, **transformer_load_kwargs)
-    print("     Moving Transformer to CUDA..."); transformer.to("cuda")
-    step2_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Transformer loaded! (VRAM: {step2_mem:.2f} MB)")
-    
-    # --- 3. Load Scheduler ---
-    print(f"\n[3] Preparing Scheduler: {scheduler_name}"); scheduler = get_scheduler_instance(scheduler_name, shift); print(f"     Using Scheduler: {scheduler_name}")
-    
-    # --- 4. Load Pipeline ---
-    print(f"\n[4] Loading Pipeline from: {model_path}"); print("     Passing pre-loaded components...")
-    pipe = HiDreamImagePipeline.from_pretrained(model_path, scheduler=scheduler, tokenizer_4=tokenizer, text_encoder_4=text_encoder, transformer=None, torch_dtype=model_dtype, low_cpu_mem_usage=True); print("     Pipeline structure loaded.")
-    
-    # --- 5. Final Setup ---
-    print("\n[5] Finalizing Pipeline..."); print("     Assigning transformer..."); pipe.transformer = transformer
-    print("     Moving pipeline object to CUDA (final check)...");
-    try: pipe.to("cuda")
-    except Exception as e: print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
-    if is_nf4:
-        print("     Attempting CPU offload for NF4...");
-        if hasattr(pipe, "enable_sequential_cpu_offload"):
-            try: pipe.enable_sequential_cpu_offload(); print("     ✅ CPU offload enabled.")
-            except Exception as e: print(f"     ⚠️ Failed CPU offload: {e}")
-        else: print("     ⚠️ enable_sequential_cpu_offload() not found.")
-    final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
-    return pipe, MODEL_CONFIGS[model_type]
+        if "device_map" not in text_encoder_load_kwargs: 
+            print("     Moving text encoder to CUDA...")
+            text_encoder.to("cuda")
+            
+        step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+        print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
+        
+        # --- 2. Load Transformer (Conditional) ---
+        print(f"\n[2] Preparing Transformer from: {model_path}")
+        transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
+        if is_nf4: print("     Type: NF4")
+        else: # Default BNB case
+            print("     Type: Standard (Applying 4-bit BNB quantization)")
+            if bnb_transformer_4bit_config:
+                transformer_load_kwargs["quantization_config"] = bnb_transformer_4bit_config
+            else:
+                raise ImportError("BNB config required for transformer but unavailable.")
+        print("     Loading Transformer... (May download files)"); transformer = HiDreamImageTransformer2DModel.from_pretrained(model_path, **transformer_load_kwargs)
+        print("     Moving Transformer to CUDA..."); transformer.to("cuda")
+        step2_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Transformer loaded! (VRAM: {step2_mem:.2f} MB)")
+        
+        # --- 3. Load Scheduler ---
+        print(f"\n[3] Preparing Scheduler: {scheduler_name}"); scheduler = get_scheduler_instance(scheduler_name, shift); print(f"     Using Scheduler: {scheduler_name}")
+        
+        # --- 4. Load Pipeline ---
+        print(f"\n[4] Loading Pipeline from: {model_path}"); print("     Passing pre-loaded components...")
+        pipe = HiDreamImagePipeline.from_pretrained(model_path, scheduler=scheduler, tokenizer_4=tokenizer, text_encoder_4=text_encoder, transformer=None, torch_dtype=model_dtype, low_cpu_mem_usage=True); print("     Pipeline structure loaded.")
+        
+        # --- 5. Final Setup ---
+        print("\n[5] Finalizing Pipeline..."); print("     Assigning transformer..."); pipe.transformer = transformer
+        print("     Moving pipeline object to CUDA (final check)...");
+        try: pipe.to("cuda")
+        except Exception as e: print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
+        if is_nf4:
+            print("     Attempting CPU offload for NF4...");
+            if hasattr(pipe, "enable_sequential_cpu_offload"):
+                try: pipe.enable_sequential_cpu_offload(); print("     ✅ CPU offload enabled.")
+                except Exception as e: print(f"     ⚠️ Failed CPU offload: {e}")
+            else: print("     ⚠️ enable_sequential_cpu_offload() not found.")
+        final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
+        return pipe, MODEL_CONFIGS[model_type]
     
 # --- Resolution Parsing & Tensor Conversion ---
 RESOLUTION_OPTIONS = [ # (Keep list the same)

@@ -257,30 +257,30 @@ def load_models(model_type, use_uncensored_llm=False):
                 print("     Using special handling for Lexi Uncensored model")
                 try:
                     from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-
-                    # Create BitsAndBytes NF4 config
+    
+                    # Create BitsAndBytes config matching the Lexi model's config.json
                     bnb_config = BitsAndBytesConfig(
                         load_in_4bit=True,
                         bnb_4bit_quant_type="nf4",
-                        bnb_4bit_compute_dtype=torch.float16,
-                        bnb_4bit_use_double_quant=False
+                        bnb_4bit_compute_dtype=torch.bfloat16, # Match model config
+                        bnb_4bit_use_double_quant=True, # Match model config
+                        # We don't explicitly set storage type, let BNB handle it
                     )
-
-                    # Load onto CPU first, remove device_map
+    
+                    # Use torch.bfloat16 as specified in config
                     text_encoder_load_kwargs = {
                         "quantization_config": bnb_config,
-                        # "device_map": "auto", # REMOVE THIS
-                        "torch_dtype": torch.float16,
-                        "low_cpu_mem_usage": True, # Helps manage CPU RAM during load
+                        "device_map": "auto", # Restore device_map for this specific config
+                        "torch_dtype": torch.bfloat16,
+                        "low_cpu_mem_usage": True,
                     }
-
-                    print("     Will use AutoModelForCausalLM with BitsAndBytes config, loading on CPU first.")
+    
+                    print("     Using AutoModelForCausalLM with specific BitsAndBytes config for Lexi model.")
                     use_auto_model = True
-
+    
                 except ImportError as e:
                     print(f"     Warning: Could not set up BitsAndBytes config: {e}")
-                    # Fallback or error needed here if BNB is critical
-                    use_auto_model = False # Revert to default if setup fails
+                    use_auto_model = False
             else:
                 use_auto_model = False
                 # Regular GPTQ handling

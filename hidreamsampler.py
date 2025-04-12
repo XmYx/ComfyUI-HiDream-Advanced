@@ -247,16 +247,64 @@ def load_models(model_type, use_uncensored_llm=False):
         # --- 1. Load LLM (Conditional) ---
     text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}
     if is_nf4:
-        # Choose uncensored model if requested, but keep loading process identical
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_NF4_LLAMA_MODEL_NAME
             print(f"\n[1a] Preparing Uncensored LLM (NF4): {llama_model_name}")
-
-            # Check if this is the Lexi model which needs special handling
+    
+            # Check if this is the Lexi model or GPTQ model which needs special handling
             if "Lexi-Uncensored" in llama_model_name:
-                print("     Using special handling for Lexi Uncensored model")
+                print("     Using special handling for Lexi Uncensored model (BitsAndBytes NF4)")
                 try:
                     from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+                    
+                    # Create BitsAndBytes config matching the Lexi model's config.json
+                    bnb_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_compute_dtype=torch.bfloat16, # Explicitly match config
+                        bnb_4bit_use_double_quant=True,     # Explicitly match config
+                    )
+                    
+                    # Configure kwargs specifically for Lexi/BNB NF4
+                    text_encoder_load_kwargs = {
+                        "quantization_config": bnb_config,
+                        "device_map": "auto", # Keep device_map for BNB+accelerate
+                        "torch_dtype": torch.bfloat16,
+                        # Removed low_cpu_mem_usage
+                    }
+                    print("     Using AutoModelForCausalLM with specific BitsAndBytes config and device_map='auto'.")
+                    use_auto_model = True # Set flag to use AutoModel
+                
+                except ImportError as e:
+                    print(f"     ERROR: Could not import necessary components for BitsAndBytes: {e}")
+                    raise ImportError("BitsAndBytes setup failed for Lexi model.") # Stop if BNB fails
+                except Exception as e:
+                     print(f"     ERROR: Failed to set up BitsAndBytes config: {e}")
+                     raise e # Stop on other errors
+            elif "GPTQ" in llama_model_name or "gptq" in llama_model_name:
+                print("     Using special handling for GPTQ model")
+                try:
+                    from transformers import AutoModelForCausalLM
+                    
+                    # Special handling for GPTQ - WITHOUT quantization_config
+                    # This is the key fix - don't try to further quantize a GPTQ model
+                    text_encoder_load_kwargs = {
+                        "device_map": "auto" if accelerate_available else None,
+                        "torch_dtype": torch.float16,  # Use float16 instead of bfloat16 for GPTQ
+                    }
+                    
+                    print("     Using AutoModelForCausalLM with GPTQ-specific settings (no quantization_config)")
+                    use_auto_model = True
+                    
+                    # Important: skip applying rope_scaling and other transforms later
+                    skip_further_transforms = True
+                    
+                except ImportError as e:
+                    print(f"     ERROR: Could not import necessary components: {e}")
+                    raise ImportError("Failed to set up for GPTQ model.")
+                except Exception as e:
+                    print(f"     ERROR: Failed to set up config: {e}")
+                    raise e
     
                     # Create BitsAndBytes config matching the Lexi model's config.json
                     bnb_config = BitsAndBytesConfig(
@@ -339,31 +387,83 @@ def load_models(model_type, use_uncensored_llm=False):
     print("     Tokenizer loaded.")
     
     if is_nf4:
-        # More aggressive RoPE scaling fix
-        try:
-            # Direct fix: Load and completely replace the config
-            from transformers import AutoConfig
-            # Load the config and make a deep copy we can modify
-            config = AutoConfig.from_pretrained(llama_model_name)
-            # Completely replace the rope_scaling with a known good config
-            config.rope_scaling = {"type": "linear", "factor": 1.0}
-            print(f"     ✅ Fixed rope_scaling to: {config.rope_scaling}")
-            # Force using our fixed config
-            text_encoder_load_kwargs["config"] = config
-            # Disable all validation for good measure
-            text_encoder_load_kwargs["low_cpu_mem_usage"] = True
-        except Exception as e:
-            print(f"     ⚠️ Failed to patch config: {e}")
+        # Define skip_rope_fix variable if not defined earlier
+        if 'skip_further_transforms' not in locals():
+            skip_further_transforms = False
+            
+        # Skip for GPTQ models (they already have their own RoPE config)
+        if skip_further_transforms or (use_uncensored_llm and ("GPTQ" in llama_model_name or "gptq" in llama_model_name)):
+            print("     ⚠️ Skipping RoPE scaling fix for GPTQ model")
+        else:
+            # More aggressive RoPE scaling fix for other models
+            try:
+                # Direct fix: Load and completely replace the config
+                from transformers import AutoConfig
+                # Load the config and make a deep copy we can modify
+                # IMPORTANT: Use the config associated with the *selected* llama_model_name
+                loaded_config = AutoConfig.from_pretrained(llama_model_name)
+                # Completely replace the rope_scaling with a known good config
+                loaded_config.rope_scaling = {"type": "linear", "factor": 1.0}
+                print(f"     ✅ Fixed rope_scaling to: {loaded_config.rope_scaling}")
+                # Force using our fixed config
+                # This might override quantization_config if not careful,
+                # so we only add it if it's not the Lexi case where we handle kwargs separately
+                if not (use_uncensored_llm and "Lexi-Uncensored" in llama_model_name):
+                     text_encoder_load_kwargs["config"] = loaded_config
+        
+            except Exception as e:
+                print(f"     ⚠️ Failed to patch config: {e}")
     
-    print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
-    if use_auto_model:
-        # For Lexi model, use AutoModelForCausalLM
-        from transformers import AutoModelForCausalLM
-        text_encoder = AutoModelForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
-        print("     Using AutoModelForCausalLM for Lexi model")
+    # --- Text Encoder Loading (outside the if/else) ---
+print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
+if use_auto_model:
+    # For specially handled models (Lexi or GPTQ), use AutoModelForCausalLM
+    from transformers import AutoModelForCausalLM
+    
+    if "GPTQ" in llama_model_name or "gptq" in llama_model_name:
+        # For GPTQ models, try optimum.gptq first if available
+        if optimum_available and autogptq_available:
+            try:
+                print("     Trying optimum.gptq for loading GPTQ model...")
+                from optimum.gptq import GPTQModelForCausalLM
+                
+                text_encoder = GPTQModelForCausalLM.from_quantized(
+                    llama_model_name,
+                    device_map=text_encoder_load_kwargs.get("device_map"),
+                    torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
+                )
+                print("     Successfully loaded with optimum.gptq")
+            except Exception as e:
+                print(f"     optimum.gptq failed: {e}, falling back to AutoModelForCausalLM")
+                text_encoder = AutoModelForCausalLM.from_pretrained(
+                    llama_model_name,
+                    device_map=text_encoder_load_kwargs.get("device_map"),
+                    torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
+                )
+        else:
+            # If optimum not available, use AutoModelForCausalLM directly
+            print("     Loading GPTQ model with AutoModelForCausalLM...")
+            text_encoder = AutoModelForCausalLM.from_pretrained(
+                llama_model_name,
+                device_map=text_encoder_load_kwargs.get("device_map"),
+                torch_dtype=text_encoder_load_kwargs.get("torch_dtype", torch.float16)
+            )
+        print(f"     Using AutoModelForCausalLM for GPTQ model")
     else:
-        # For all other models, use LlamaForCausalLM
-        text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
+        # For Lexi model, use AutoModelForCausalLM with specific args
+        text_encoder = AutoModelForCausalLM.from_pretrained(
+            llama_model_name,
+            quantization_config=text_encoder_load_kwargs.get("quantization_config"),
+            device_map=text_encoder_load_kwargs.get("device_map"),
+            torch_dtype=text_encoder_load_kwargs.get("torch_dtype")
+        )
+        print("     Using AutoModelForCausalLM for Lexi model")
+else:
+    # For all other models, use LlamaForCausalLM with the full kwargs dict
+    text_encoder = LlamaForCausalLM.from_pretrained(
+        llama_model_name,
+        **text_encoder_load_kwargs
+    )
     
     if "device_map" not in text_encoder_load_kwargs: 
         print("     Moving text encoder to CUDA...")

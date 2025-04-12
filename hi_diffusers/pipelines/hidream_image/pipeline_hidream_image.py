@@ -227,7 +227,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         prompt_embeds = prompt_embeds.view(batch_size * num_images_per_prompt, -1)
 
         return prompt_embeds
-    
+
     def _get_llama3_prompt_embeds(
         self,
         prompt: Union[str, List[str]] = None,
@@ -241,14 +241,12 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         dtype = dtype or self.text_encoder_4.dtype
         prompt = [prompt] if isinstance(prompt, str) else prompt
         batch_size = len(prompt)
-        
-        # Format prompts with system message - this is the key addition
+        # Format prompts with system message
         formatted_prompts = []
         for p in prompt:
             # Use the proper chat template format for Llama 3
             formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
             formatted_prompts.append(formatted_prompt)
-        
         text_inputs = self.tokenizer_4(
             formatted_prompts,
             padding="max_length",
@@ -257,8 +255,6 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             add_special_tokens=True,
             return_tensors="pt",
         )
-        
-        # Rest of the method remains unchanged
         text_input_ids = text_inputs.input_ids
         attention_mask = text_inputs.attention_mask
         untruncated_ids = self.tokenizer_4(formatted_prompts, padding="longest", return_tensors="pt").input_ids
@@ -268,15 +264,89 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                 "The following part of your input was truncated because `max_sequence_length` is set to "
                 f" {min(max_sequence_length, self.tokenizer_4.model_max_length)} tokens: {removed_text}"
             )
-        outputs = self.text_encoder_4(
-            text_input_ids.to(device),
-            attention_mask=attention_mask.to(device),
-            output_hidden_states=True,
-            output_attentions=True
-        )
-        prompt_embeds = outputs.hidden_states[1:]
-        prompt_embeds = torch.stack(prompt_embeds, dim=0)
-        _,_ , seq_len, dim = prompt_embeds.shape
+        
+        # Check if model has weights in uint8 format (GPTQ/uncensored models)
+        is_uint8_model = False
+        for _, module in self.text_encoder_4.named_modules():
+            if hasattr(module, 'weight') and hasattr(module.weight, 'dtype') and module.weight.dtype == torch.uint8:
+                is_uint8_model = True
+                break
+        
+        # Different processing based on model type
+        if is_uint8_model:
+            print("Detected uint8 quantized model, using safe processing path")
+            # For uint8 quantized models, we need to be careful with hooks
+            # Save the current forward hooks and remove them temporarily
+            model = self.text_encoder_4
+            hooks_to_restore = {}
+            
+            # Try to disable BnB hooks that cause the error
+            try:
+                # Collect and disable pre-forward hooks on modules that might trigger quantization
+                for name, module in model.named_modules():
+                    if hasattr(module, '_forward_pre_hooks'):
+                        hooks = {}
+                        for hook_id, hook in module._forward_pre_hooks.items():
+                            if "pre_forward" in str(hook) or "quantize" in str(hook):
+                                hooks[hook_id] = hook
+                        
+                        # If we found hooks to disable
+                        if hooks:
+                            # Save for restoration
+                            hooks_to_restore[name] = hooks
+                            # Remove problematic hooks
+                            for hook_id in hooks.keys():
+                                module._forward_pre_hooks.pop(hook_id, None)
+                
+                print(f"Temporarily disabled {sum(len(h) for h in hooks_to_restore.values())} problematic hooks")
+            except Exception as e:
+                print(f"Warning: Failed to disable hooks: {e}")
+            
+            # Process normally but with hooks disabled
+            try:
+                outputs = model(
+                    text_input_ids.to(device),
+                    attention_mask=attention_mask.to(device),
+                    output_hidden_states=True,
+                    output_attentions=True,
+                )
+                
+                # Extract hidden states
+                prompt_embeds = outputs.hidden_states[1:]
+                prompt_embeds = torch.stack(prompt_embeds, dim=0)
+            except Exception as e:
+                print(f"Error with hooks disabled: {e}")
+                raise
+            finally:
+                # Restore hooks if needed
+                try:
+                    for name, hooks in hooks_to_restore.items():
+                        if '.' in name:
+                            names = name.split('.')
+                            module = model
+                            for n in names:
+                                module = getattr(module, n)
+                        else:
+                            module = getattr(model, name)
+                        
+                        for hook_id, hook in hooks.items():
+                            module._forward_pre_hooks[hook_id] = hook
+                    print("Restored hooks")
+                except Exception as e:
+                    print(f"Warning: Failed to restore hooks: {e}")
+        else:
+            # Original processing for float16/32 models
+            outputs = self.text_encoder_4(
+                text_input_ids.to(device),
+                attention_mask=attention_mask.to(device),
+                output_hidden_states=True,
+                output_attentions=True
+            )
+            prompt_embeds = outputs.hidden_states[1:]
+            prompt_embeds = torch.stack(prompt_embeds, dim=0)
+        
+        # Continue with the rest of the method as before
+        _, _, seq_len, dim = prompt_embeds.shape
         # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, 1, num_images_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(-1, batch_size * num_images_per_prompt, seq_len, dim)

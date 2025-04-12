@@ -244,8 +244,11 @@ def load_models(model_type, use_uncensored_llm=False):
             # Remove from cache to avoid reusing
             HiDreamSampler._model_cache.pop(cache_key, None)
     
-        # --- 1. Load LLM (Conditional) ---
+    # --- 1. Load LLM (Conditional) ---
     text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}
+    use_auto_model = False  # Initialize use_auto_model flag
+    skip_further_transforms = False  # Initialize skip_further_transforms flag
+    
     if is_nf4:
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_NF4_LLAMA_MODEL_NAME
@@ -305,44 +308,6 @@ def load_models(model_type, use_uncensored_llm=False):
                 except Exception as e:
                     print(f"     ERROR: Failed to set up config: {e}")
                     raise e
-    
-                    # Create BitsAndBytes config matching the Lexi model's config.json
-                    bnb_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_quant_type="nf4",
-                        bnb_4bit_compute_dtype=torch.bfloat16, # Match model config
-                        bnb_4bit_use_double_quant=True, # Match model config
-                        # We don't explicitly set storage type, let BNB handle it
-                    )
-    
-                    # Use torch.bfloat16 as specified in config
-                    text_encoder_load_kwargs = {
-                        "quantization_config": bnb_config,
-                        "device_map": "auto", # Restore device_map for this specific config
-                        "torch_dtype": torch.bfloat16,
-                        "low_cpu_mem_usage": True,
-                    }
-    
-                    print("     Using AutoModelForCausalLM with specific BitsAndBytes config for Lexi model.")
-                    use_auto_model = True
-    
-                except ImportError as e:
-                    print(f"     Warning: Could not set up BitsAndBytes config: {e}")
-                    use_auto_model = False
-            else:
-                use_auto_model = False
-                # Regular GPTQ handling
-                if accelerate_available:
-                    # Fix for device format - use integer instead of cuda:0
-                    if hasattr(torch.cuda, 'get_device_properties') and torch.cuda.is_available():
-                        total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                        # Use 40% for model, leaving room for the transformer
-                        max_mem = int(total_mem * 0.4)
-                        text_encoder_load_kwargs["max_memory"] = {0: f"{max_mem}GiB"}
-                        print(f"     Setting max memory limit: {max_mem}GiB of {total_mem:.1f}GiB")
-                    text_encoder_load_kwargs["device_map"] = "auto";
-                    print("     Using device_map='auto'.")
-                else: print("     accelerate not found, attempting manual placement.")
         else:
             llama_model_name = NF4_LLAMA_MODEL_NAME
             print(f"\n[1a] Preparing LLM (GPTQ): {llama_model_name}")
@@ -387,10 +352,6 @@ def load_models(model_type, use_uncensored_llm=False):
     print("     Tokenizer loaded.")
     
     if is_nf4:
-        # Define skip_rope_fix variable if not defined earlier
-        if 'skip_further_transforms' not in locals():
-            skip_further_transforms = False
-            
         # Skip for GPTQ models (they already have their own RoPE config)
         if skip_further_transforms or (use_uncensored_llm and ("GPTQ" in llama_model_name or "gptq" in llama_model_name)):
             print("     ⚠️ Skipping RoPE scaling fix for GPTQ model")
@@ -464,48 +425,74 @@ def load_models(model_type, use_uncensored_llm=False):
             llama_model_name,
             **text_encoder_load_kwargs
         )
+    
+    if "device_map" not in text_encoder_load_kwargs: 
+        print("     Moving text encoder to CUDA...")
+        text_encoder.to("cuda")
         
-        if "device_map" not in text_encoder_load_kwargs: 
-            print("     Moving text encoder to CUDA...")
-            text_encoder.to("cuda")
-            
-        step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
-        print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
-        
-        # --- 2. Load Transformer (Conditional) ---
-        print(f"\n[2] Preparing Transformer from: {model_path}")
-        transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
-        if is_nf4: print("     Type: NF4")
-        else: # Default BNB case
-            print("     Type: Standard (Applying 4-bit BNB quantization)")
-            if bnb_transformer_4bit_config:
-                transformer_load_kwargs["quantization_config"] = bnb_transformer_4bit_config
-            else:
-                raise ImportError("BNB config required for transformer but unavailable.")
-        print("     Loading Transformer... (May download files)"); transformer = HiDreamImageTransformer2DModel.from_pretrained(model_path, **transformer_load_kwargs)
-        print("     Moving Transformer to CUDA..."); transformer.to("cuda")
-        step2_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Transformer loaded! (VRAM: {step2_mem:.2f} MB)")
-        
-        # --- 3. Load Scheduler ---
-        print(f"\n[3] Preparing Scheduler: {scheduler_name}"); scheduler = get_scheduler_instance(scheduler_name, shift); print(f"     Using Scheduler: {scheduler_name}")
-        
-        # --- 4. Load Pipeline ---
-        print(f"\n[4] Loading Pipeline from: {model_path}"); print("     Passing pre-loaded components...")
-        pipe = HiDreamImagePipeline.from_pretrained(model_path, scheduler=scheduler, tokenizer_4=tokenizer, text_encoder_4=text_encoder, transformer=None, torch_dtype=model_dtype, low_cpu_mem_usage=True); print("     Pipeline structure loaded.")
-        
-        # --- 5. Final Setup ---
-        print("\n[5] Finalizing Pipeline..."); print("     Assigning transformer..."); pipe.transformer = transformer
-        print("     Moving pipeline object to CUDA (final check)...");
-        try: pipe.to("cuda")
-        except Exception as e: print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
-        if is_nf4:
-            print("     Attempting CPU offload for NF4...");
-            if hasattr(pipe, "enable_sequential_cpu_offload"):
-                try: pipe.enable_sequential_cpu_offload(); print("     ✅ CPU offload enabled.")
-                except Exception as e: print(f"     ⚠️ Failed CPU offload: {e}")
-            else: print("     ⚠️ enable_sequential_cpu_offload() not found.")
-        final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
-        return pipe, MODEL_CONFIGS[model_type]
+    step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+    print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
+    
+    # --- 2. Load Transformer (Conditional) ---
+    print(f"\n[2] Preparing Transformer from: {model_path}")
+    transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
+    if is_nf4: print("     Type: NF4")
+    else: # Default BNB case
+        print("     Type: Standard (Applying 4-bit BNB quantization)")
+        if bnb_transformer_4bit_config:
+            transformer_load_kwargs["quantization_config"] = bnb_transformer_4bit_config
+        else:
+            raise ImportError("BNB config required for transformer but unavailable.")
+    print("     Loading Transformer... (May download files)") 
+    transformer = HiDreamImageTransformer2DModel.from_pretrained(model_path, **transformer_load_kwargs)
+    print("     Moving Transformer to CUDA...")
+    transformer.to("cuda")
+    step2_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+    print(f"✅ Transformer loaded! (VRAM: {step2_mem:.2f} MB)")
+    
+    # --- 3. Load Scheduler ---
+    print(f"\n[3] Preparing Scheduler: {scheduler_name}")
+    scheduler = get_scheduler_instance(scheduler_name, shift)
+    print(f"     Using Scheduler: {scheduler_name}")
+    
+    # --- 4. Load Pipeline ---
+    print(f"\n[4] Loading Pipeline from: {model_path}")
+    print("     Passing pre-loaded components...")
+    pipe = HiDreamImagePipeline.from_pretrained(
+        model_path, 
+        scheduler=scheduler, 
+        tokenizer_4=tokenizer, 
+        text_encoder_4=text_encoder, 
+        transformer=None, 
+        torch_dtype=model_dtype, 
+        low_cpu_mem_usage=True
+    )
+    print("     Pipeline structure loaded.")
+    
+    # --- 5. Final Setup ---
+    print("\n[5] Finalizing Pipeline...")
+    print("     Assigning transformer...")
+    pipe.transformer = transformer
+    print("     Moving pipeline object to CUDA (final check)...")
+    try: 
+        pipe.to("cuda")
+    except Exception as e: 
+        print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
+    
+    if is_nf4:
+        print("     Attempting CPU offload for NF4...")
+        if hasattr(pipe, "enable_sequential_cpu_offload"):
+            try: 
+                pipe.enable_sequential_cpu_offload()
+                print("     ✅ CPU offload enabled.")
+            except Exception as e: 
+                print(f"     ⚠️ Failed CPU offload: {e}")
+        else: 
+            print("     ⚠️ enable_sequential_cpu_offload() not found.")
+    
+    final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+    print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
+    return pipe, MODEL_CONFIGS[model_type]
     
 # --- Resolution Parsing & Tensor Conversion ---
 RESOLUTION_OPTIONS = [ # (Keep list the same)

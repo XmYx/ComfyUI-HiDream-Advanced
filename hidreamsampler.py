@@ -250,16 +250,14 @@ def load_models(model_type, use_uncensored_llm=False):
         # Choose uncensored model if requested, but keep loading process identical
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_NF4_LLAMA_MODEL_NAME
-            print(f"\n[1a] Preparing Uncensored LLM (GPTQ): {llama_model_name}")
-            
+            print(f"\n[1a] Preparing Uncensored LLM (NF4): {llama_model_name}")
+
             # Check if this is the Lexi model which needs special handling
             if "Lexi-Uncensored" in llama_model_name:
                 print("     Using special handling for Lexi Uncensored model")
-                
-                # Try importing necessary components
                 try:
                     from transformers import AutoModelForCausalLM, BitsAndBytesConfig
-                    
+
                     # Create BitsAndBytes NF4 config
                     bnb_config = BitsAndBytesConfig(
                         load_in_4bit=True,
@@ -267,20 +265,22 @@ def load_models(model_type, use_uncensored_llm=False):
                         bnb_4bit_compute_dtype=torch.float16,
                         bnb_4bit_use_double_quant=False
                     )
-                    
-                    # Clear existing kwargs and set new ones for Lexi model
+
+                    # Load onto CPU first, remove device_map
                     text_encoder_load_kwargs = {
                         "quantization_config": bnb_config,
-                        "device_map": "auto",
-                        "torch_dtype": torch.float16,  # Use float16 for Lexi
+                        # "device_map": "auto", # REMOVE THIS
+                        "torch_dtype": torch.float16,
+                        "low_cpu_mem_usage": True, # Helps manage CPU RAM during load
                     }
-                    
-                    print("     Will use AutoModelForCausalLM with BitsAndBytes config")
+
+                    print("     Will use AutoModelForCausalLM with BitsAndBytes config, loading on CPU first.")
                     use_auto_model = True
-                    
+
                 except ImportError as e:
                     print(f"     Warning: Could not set up BitsAndBytes config: {e}")
-                    use_auto_model = False
+                    # Fallback or error needed here if BNB is critical
+                    use_auto_model = False # Revert to default if setup fails
             else:
                 use_auto_model = False
                 # Regular GPTQ handling

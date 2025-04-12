@@ -243,32 +243,74 @@ def load_models(model_type, use_uncensored_llm=False):
             print(f"Cache entry invalid for {cache_key}, reloading")
             # Remove from cache to avoid reusing
             HiDreamSampler._model_cache.pop(cache_key, None)
-
     
-    # --- 1. Load LLM (Conditional) ---
+        # --- 1. Load LLM (Conditional) ---
     text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}
-    
     if is_nf4:
         # Choose uncensored model if requested, but keep loading process identical
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_NF4_LLAMA_MODEL_NAME
             print(f"\n[1a] Preparing Uncensored LLM (GPTQ): {llama_model_name}")
+            
+            # Check if this is the Lexi model which needs special handling
+            if "Lexi-Uncensored" in llama_model_name:
+                print("     Using special handling for Lexi Uncensored model")
+                
+                # Try importing necessary components
+                try:
+                    from transformers import AutoModelForCausalLM, BitsAndBytesConfig
+                    
+                    # Create BitsAndBytes NF4 config
+                    bnb_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_quant_type="nf4",
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_use_double_quant=False
+                    )
+                    
+                    # Clear existing kwargs and set new ones for Lexi model
+                    text_encoder_load_kwargs = {
+                        "quantization_config": bnb_config,
+                        "device_map": "auto",
+                        "torch_dtype": torch.float16,  # Use float16 for Lexi
+                    }
+                    
+                    print("     Will use AutoModelForCausalLM with BitsAndBytes config")
+                    use_auto_model = True
+                    
+                except ImportError as e:
+                    print(f"     Warning: Could not set up BitsAndBytes config: {e}")
+                    use_auto_model = False
+            else:
+                use_auto_model = False
+                # Regular GPTQ handling
+                if accelerate_available:
+                    # Fix for device format - use integer instead of cuda:0
+                    if hasattr(torch.cuda, 'get_device_properties') and torch.cuda.is_available():
+                        total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                        # Use 40% for model, leaving room for the transformer
+                        max_mem = int(total_mem * 0.4)
+                        text_encoder_load_kwargs["max_memory"] = {0: f"{max_mem}GiB"}
+                        print(f"     Setting max memory limit: {max_mem}GiB of {total_mem:.1f}GiB")
+                    text_encoder_load_kwargs["device_map"] = "auto";
+                    print("     Using device_map='auto'.")
+                else: print("     accelerate not found, attempting manual placement.")
         else:
             llama_model_name = NF4_LLAMA_MODEL_NAME
             print(f"\n[1a] Preparing LLM (GPTQ): {llama_model_name}")
-            
-        # Rest of the NF4 loading process stays exactly the same
-        if accelerate_available:
-            # Fix for device format - use integer instead of cuda:0
-            if hasattr(torch.cuda, 'get_device_properties') and torch.cuda.is_available():
-                total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-                # Use 40% for model, leaving room for the transformer
-                max_mem = int(total_mem * 0.4)
-                text_encoder_load_kwargs["max_memory"] = {0: f"{max_mem}GiB"}
-                print(f"     Setting max memory limit: {max_mem}GiB of {total_mem:.1f}GiB")
-            text_encoder_load_kwargs["device_map"] = "auto";
-            print("     Using device_map='auto'.")
-        else: print("     accelerate not found, attempting manual placement.")
+            use_auto_model = False
+            # Standard GPTQ setup
+            if accelerate_available:
+                # Fix for device format - use integer instead of cuda:0
+                if hasattr(torch.cuda, 'get_device_properties') and torch.cuda.is_available():
+                    total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                    # Use 40% for model, leaving room for the transformer
+                    max_mem = int(total_mem * 0.4)
+                    text_encoder_load_kwargs["max_memory"] = {0: f"{max_mem}GiB"}
+                    print(f"     Setting max memory limit: {max_mem}GiB of {total_mem:.1f}GiB")
+                text_encoder_load_kwargs["device_map"] = "auto";
+                print("     Using device_map='auto'.")
+            else: print("     accelerate not found, attempting manual placement.")
     else:
         # For non-NF4 models, choose uncensored if requested
         if use_uncensored_llm:
@@ -277,7 +319,6 @@ def load_models(model_type, use_uncensored_llm=False):
         else:
             llama_model_name = ORIGINAL_LLAMA_MODEL_NAME
             print(f"\n[1a] Preparing LLM (4-bit BNB): {llama_model_name}")
-            
         # Rest of standard model loading stays exactly the same
         if bnb_llm_config: text_encoder_load_kwargs["quantization_config"] = bnb_llm_config; print("     Using 4-bit BNB.")
         else: raise ImportError("BNB config required for standard LLM.")
@@ -291,36 +332,49 @@ def load_models(model_type, use_uncensored_llm=False):
         else:
             text_encoder_load_kwargs["attn_implementation"] = "eager"
             print("     Using standard eager attention.")
+        use_auto_model = False
     
-    print(f"[1b] Loading Tokenizer: {llama_model_name}..."); tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False); print("     Tokenizer loaded.")
-
+    print(f"[1b] Loading Tokenizer: {llama_model_name}..."); 
+    tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False); 
+    print("     Tokenizer loaded.")
+    
     if is_nf4:
         # More aggressive RoPE scaling fix
         try:
             # Direct fix: Load and completely replace the config
             from transformers import AutoConfig
-            
             # Load the config and make a deep copy we can modify
             config = AutoConfig.from_pretrained(llama_model_name)
-            
             # Completely replace the rope_scaling with a known good config
             config.rope_scaling = {"type": "linear", "factor": 1.0}
             print(f"     ✅ Fixed rope_scaling to: {config.rope_scaling}")
-            
             # Force using our fixed config
             text_encoder_load_kwargs["config"] = config
-            
             # Disable all validation for good measure
             text_encoder_load_kwargs["low_cpu_mem_usage"] = True
         except Exception as e:
             print(f"     ⚠️ Failed to patch config: {e}")
     
-    print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)"); text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
-    if "device_map" not in text_encoder_load_kwargs: print("     Moving text encoder to CUDA..."); text_encoder.to("cuda")
-    step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
+    print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
+    if use_auto_model:
+        # For Lexi model, use AutoModelForCausalLM
+        from transformers import AutoModelForCausalLM
+        text_encoder = AutoModelForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
+        print("     Using AutoModelForCausalLM for Lexi model")
+    else:
+        # For all other models, use LlamaForCausalLM
+        text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
+    
+    if "device_map" not in text_encoder_load_kwargs: 
+        print("     Moving text encoder to CUDA...")
+        text_encoder.to("cuda")
+        
+    step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+    print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
     
     # --- 2. Load Transformer (Conditional) ---
-    print(f"\n[2] Preparing Transformer from: {model_path}"); transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
+    print(f"\n[2] Preparing Transformer from: {model_path}")
+    transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
     if is_nf4: print("     Type: NF4")
     else: # Default BNB case
         print("     Type: Standard (Applying 4-bit BNB quantization)")

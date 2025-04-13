@@ -725,28 +725,9 @@ class HiDreamSampler:
         # --- Run Inference ---
         output_images = None
         try:
-            from transformers import LlamaForCausalLM
-            def is_quantized_llama(model):
-                # For HF/BnB/Optimum GPTQ etc.
-                return (
-                    hasattr(model, "is_loaded_in_4bit") and model.is_loaded_in_4bit
-                ) or hasattr(model, "quantization_config") or (
-                    hasattr(model.config, "quantization_config") and model.config.quantization_config is not None
-                )
-            
-            # Define quantized_llama before usage!!
-            quantized_llama = (
-                "text_encoder_4" in pipe.__dict__ and isinstance(pipe.text_encoder_4, LlamaForCausalLM) and is_quantized_llama(pipe.text_encoder_4)
-            ) or is_quantized_llama(text_encoder)
-            quantized_llama = (
-                hasattr(pipe, "text_encoder_4")
-                and isinstance(pipe.text_encoder_4, LlamaForCausalLM)
-                and getattr(pipe.text_encoder_4, "is_loaded_in_4bit", False)
-            ) or (hasattr(pipe.text_encoder_4, "quantization_config"))
-            
-            if quantized_llama:
-                print(f"Skipping pipe.to({inference_device}) for quantized Llama (already on device, cannot move).")
-                # Optionally, move VAE and transformer separately here if needed
+            # Only move to device if NOT offloaded with sequential cpu offload
+            if hasattr(pipe, "_is_sequential_cpu_offload") and pipe._is_sequential_cpu_offload:
+                print("Pipeline offload is enabled; skipping .to()")
             else:
                 print(f"Ensuring pipe on: {inference_device}")
                 pipe.to(inference_device)

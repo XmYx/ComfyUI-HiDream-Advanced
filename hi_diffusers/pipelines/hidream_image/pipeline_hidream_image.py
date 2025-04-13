@@ -811,7 +811,17 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         else:
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
 
+            # Sanity check for latent values
+            if not torch.isfinite(latents).all():
+                print("WARNING: NaNs detected in latents before VAE decode! Zeroing out.")
+                latents = torch.nan_to_num(latents, nan=0.0)
             image = self.vae.decode(latents, return_dict=False)[0]
+        
+            if not torch.isfinite(image).all():
+                print("WARNING: NaNs detected in VAE output before postprocess! Clamping to 0.")
+                image = torch.nan_to_num(image, nan=0.0)
+            image = torch.clamp(image, 0.0, 1.0)
+        
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models

@@ -36,8 +36,6 @@ else:
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-DEBUG = False # Set to True to enable debug / troubleshooting output
-
 # Copied from diffusers.pipelines.flux.pipeline_flux.calculate_shift
 def calculate_shift(
     image_seq_len,
@@ -235,7 +233,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         prompt: Union[str, List[str]] = None,
         num_images_per_prompt: int = 1,
         max_sequence_length: int = 128,
-        system_prompt: Optional[str] = "",  # Blank ok, use conditional below
+        system_prompt: Optional[str] = "",
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
@@ -243,8 +241,8 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         dtype = dtype or self.text_encoder_4.dtype
         prompt = [prompt] if isinstance(prompt, str) else prompt
         batch_size = len(prompt)
-        if DEBUG:
-            print(f"Using system prompt: {system_prompt[:60]}")
+        
+        # Format prompts with system message - this is the key addition
         formatted_prompts = []
         for p in prompt:
             if system_prompt:
@@ -252,6 +250,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             else:
                 formatted_prompt = f"<|user|>\n{p}\n<|assistant|>"
             formatted_prompts.append(formatted_prompt)
+        
         text_inputs = self.tokenizer_4(
             formatted_prompts,
             padding="max_length",
@@ -260,18 +259,17 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             add_special_tokens=True,
             return_tensors="pt",
         )
+        
+        # Rest of the method remains unchanged
         text_input_ids = text_inputs.input_ids
         attention_mask = text_inputs.attention_mask
-    
-        if DEBUG:
-            untruncated_ids = self.tokenizer_4(formatted_prompts, padding="longest", return_tensors="pt").input_ids
-            if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
-                removed_text = self.tokenizer_4.batch_decode(untruncated_ids[:, min(max_sequence_length, self.tokenizer_4.model_max_length) - 1 : -1])
-                logger.warning(
-                    "The following part of your input was truncated because `max_sequence_length` is set to "
-                    f" {min(max_sequence_length, self.tokenizer_4.model_max_length)} tokens: {removed_text}"
-                )
-    
+        untruncated_ids = self.tokenizer_4(formatted_prompts, padding="longest", return_tensors="pt").input_ids
+        if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(text_input_ids, untruncated_ids):
+            removed_text = self.tokenizer_4.batch_decode(untruncated_ids[:, min(max_sequence_length, self.tokenizer_4.model_max_length) - 1 : -1])
+            logger.warning(
+                "The following part of your input was truncated because `max_sequence_length` is set to "
+                f" {min(max_sequence_length, self.tokenizer_4.model_max_length)} tokens: {removed_text}"
+            )
         outputs = self.text_encoder_4(
             text_input_ids.to(device),
             attention_mask=attention_mask.to(device),
@@ -280,7 +278,8 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         )
         prompt_embeds = outputs.hidden_states[1:]
         prompt_embeds = torch.stack(prompt_embeds, dim=0)
-        _, _, seq_len, dim = prompt_embeds.shape
+        _,_ , seq_len, dim = prompt_embeds.shape
+        # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
         prompt_embeds = prompt_embeds.repeat(1, 1, num_images_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(-1, batch_size * num_images_per_prompt, seq_len, dim)
         return prompt_embeds
@@ -662,23 +661,6 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             llama_scale=llama_scale,
         )
 
-        # --- UNLOAD TEXT ENCODER 4 (LLM) AFTER EMBEDS ---
-        import gc
-        try:
-            if hasattr(self, "text_encoder_4") and self.text_encoder_4 is not None:
-                print("[HiDreamImagePipeline] Unloading text_encoder_4 (LLM) from memory/GPU after embedding.")
-                # Use to_empty if available for robust unloading (esp. GPTQ/BnB models)
-                if hasattr(self.text_encoder_4, "to_empty"):
-                    self.text_encoder_4.to_empty(device="meta")
-                else:
-                    self.text_encoder_4.to("meta")
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-        except Exception as e:
-            print(f"[HiDreamImagePipeline] Could not fully unload LLM: {e}")
-        # --- CONTINUE TO LATENT PREP/DENOISING ---
-        
         if self.do_classifier_free_guidance:
             prompt_embeds_arr = []
             for n, p in zip(negative_prompt_embeds, prompt_embeds):
@@ -811,17 +793,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         else:
             latents = (latents / self.vae.config.scaling_factor) + self.vae.config.shift_factor
 
-            # Sanity check for latent values
-            if not torch.isfinite(latents).all():
-                print("WARNING: NaNs detected in latents before VAE decode! Zeroing out.")
-                latents = torch.nan_to_num(latents, nan=0.0)
             image = self.vae.decode(latents, return_dict=False)[0]
-        
-            if not torch.isfinite(image).all():
-                print("WARNING: NaNs detected in VAE output before postprocess! Clamping to 0.")
-                image = torch.nan_to_num(image, nan=0.0)
-            image = torch.clamp(image, 0.0, 1.0)
-        
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models

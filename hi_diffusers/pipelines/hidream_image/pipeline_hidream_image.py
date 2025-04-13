@@ -774,8 +774,6 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                     self.text_encoder_4.to_empty(device="meta")
                 else:
                     self.text_encoder_4.to("meta")
-                del self.text_encoder_4
-                self.text_encoder_4 = None
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()

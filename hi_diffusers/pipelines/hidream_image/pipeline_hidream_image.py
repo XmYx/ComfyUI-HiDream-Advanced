@@ -229,81 +229,81 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         return prompt_embeds
     
     def _get_llama3_prompt_embeds(
-    self,
-    prompt: Union[str, List[str]] = None,
-    num_images_per_prompt: int = 1,
-    max_sequence_length: int = 128,
-    system_prompt: Optional[str] = "",
-    device: Optional[torch.device] = None,
-    dtype: Optional[torch.dtype] = None,
-):
-    device = device or self._execution_device
-    dtype = dtype or self.text_encoder_4.dtype
-    prompt = [prompt] if isinstance(prompt, str) else prompt
-    batch_size = len(prompt)
-    
-    # Format prompts with system message
-    formatted_prompts = []
-    for p in prompt:
-        formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
-        formatted_prompts.append(formatted_prompt)
-    
-    text_inputs = self.tokenizer_4(
-        formatted_prompts,
-        padding="max_length",
-        max_length=min(max_sequence_length, self.tokenizer_4.model_max_length),
-        truncation=True,
-        add_special_tokens=True,
-        return_tensors="pt",
-    )
-    
-    # Temporarily disable any BnB hooks that might interfere with inference
-    old_forward_hooks = {}
-    
-    try:
-        # Try to temporarily disable BitsAndBytes hooks
-        if hasattr(self.text_encoder_4, "model"):
-            # Check for the specific hook that's causing issues
-            for name, module in self.text_encoder_4.model.named_modules():
-                if hasattr(module, "_forward_pre_hooks"):
-                    for hook_id, hook in list(module._forward_pre_hooks.items()):
-                        if "bitsandbytes" in str(hook.__module__).lower() or "functional.py" in str(hook):
-                            # Save and remove problematic hook
-                            if name not in old_forward_hooks:
-                                old_forward_hooks[name] = []
-                            old_forward_hooks[name].append((hook_id, hook))
-                            module._forward_pre_hooks.pop(hook_id)
+        self,
+        prompt: Union[str, List[str]] = None,
+        num_images_per_prompt: int = 1,
+        max_sequence_length: int = 128,
+        system_prompt: Optional[str] = "",
+        device: Optional[torch.device] = None,
+        dtype: Optional[torch.dtype] = None,
+    ):
+        device = device or self._execution_device
+        dtype = dtype or self.text_encoder_4.dtype
+        prompt = [prompt] if isinstance(prompt, str) else prompt
+        batch_size = len(prompt)
         
-        # Standard inference path - simple and direct
-        outputs = self.text_encoder_4(
-            text_inputs.input_ids.to(device),
-            attention_mask=text_inputs.attention_mask.to(device),
-            output_hidden_states=True
+        # Format prompts with system message
+        formatted_prompts = []
+        for p in prompt:
+            formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
+            formatted_prompts.append(formatted_prompt)
+        
+        text_inputs = self.tokenizer_4(
+            formatted_prompts,
+            padding="max_length",
+            max_length=min(max_sequence_length, self.tokenizer_4.model_max_length),
+            truncation=True,
+            add_special_tokens=True,
+            return_tensors="pt",
         )
         
-        prompt_embeds = outputs.hidden_states[1:]
-        prompt_embeds = torch.stack(prompt_embeds, dim=0)
-    
-    finally:
-        # Restore any hooks we removed
-        if old_forward_hooks:
-            for name, hooks in old_forward_hooks.items():
-                # Navigate to the module
-                parts = name.split(".")
-                module = self.text_encoder_4.model
-                for part in parts:
-                    module = getattr(module, part)
-                
-                # Restore hooks
-                for hook_id, hook in hooks:
-                    module._forward_pre_hooks[hook_id] = hook
-    
-    # Standard shape transformations
-    _, _, seq_len, dim = prompt_embeds.shape
-    prompt_embeds = prompt_embeds.repeat(1, 1, num_images_per_prompt, 1)
-    prompt_embeds = prompt_embeds.view(-1, batch_size * num_images_per_prompt, seq_len, dim)
-    
-    return prompt_embeds
+        # Temporarily disable any BnB hooks that might interfere with inference
+        old_forward_hooks = {}
+        
+        try:
+            # Try to temporarily disable BitsAndBytes hooks
+            if hasattr(self.text_encoder_4, "model"):
+                # Check for the specific hook that's causing issues
+                for name, module in self.text_encoder_4.model.named_modules():
+                    if hasattr(module, "_forward_pre_hooks"):
+                        for hook_id, hook in list(module._forward_pre_hooks.items()):
+                            if "bitsandbytes" in str(hook.__module__).lower() or "functional.py" in str(hook):
+                                # Save and remove problematic hook
+                                if name not in old_forward_hooks:
+                                    old_forward_hooks[name] = []
+                                old_forward_hooks[name].append((hook_id, hook))
+                                module._forward_pre_hooks.pop(hook_id)
+            
+            # Standard inference path - simple and direct
+            outputs = self.text_encoder_4(
+                text_inputs.input_ids.to(device),
+                attention_mask=text_inputs.attention_mask.to(device),
+                output_hidden_states=True
+            )
+            
+            prompt_embeds = outputs.hidden_states[1:]
+            prompt_embeds = torch.stack(prompt_embeds, dim=0)
+        
+        finally:
+            # Restore any hooks we removed
+            if old_forward_hooks:
+                for name, hooks in old_forward_hooks.items():
+                    # Navigate to the module
+                    parts = name.split(".")
+                    module = self.text_encoder_4.model
+                    for part in parts:
+                        module = getattr(module, part)
+                    
+                    # Restore hooks
+                    for hook_id, hook in hooks:
+                        module._forward_pre_hooks[hook_id] = hook
+        
+        # Standard shape transformations
+        _, _, seq_len, dim = prompt_embeds.shape
+        prompt_embeds = prompt_embeds.repeat(1, 1, num_images_per_prompt, 1)
+        prompt_embeds = prompt_embeds.view(-1, batch_size * num_images_per_prompt, seq_len, dim)
+        
+        return prompt_embeds
     
     def encode_prompt(
         self,

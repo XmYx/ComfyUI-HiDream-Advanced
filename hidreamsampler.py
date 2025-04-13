@@ -78,7 +78,7 @@ except ImportError:
 try:
     import auto_gptq
     autogptq_available = True
-    gptq_support_available = True  # This is the key - set support available if either method works
+    gptq_support_available = True 
     print("AutoGPTQ support is available")
 except ImportError:
     autogptq_available = False
@@ -317,6 +317,11 @@ def load_models(model_type, use_uncensored_llm=False):
     tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False)
     print("     Tokenizer loaded.")
     
+    # Add device_map='auto' for all quantized models!
+    if is_nf4 or bnb_llm_config is not None:
+        text_encoder_load_kwargs["device_map"] = "auto"
+        print("     Using device_map='auto' for quantized model.")
+    
     print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
     text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
     
@@ -358,11 +363,14 @@ def load_models(model_type, use_uncensored_llm=False):
                         module._skip_quant = True
         except Exception as e:
             print(f"     Warning: Error while checking for uint8 weights: {e}")
-    
-    if "device_map" not in text_encoder_load_kwargs:
-        print("     Moving text encoder to CUDA...")
+
+    # Only move un-quantized models
+    if ("quantization_config" not in text_encoder_load_kwargs
+        and not text_encoder.config.__dict__.get("quantization_config", None)
+        and "device_map" not in text_encoder_load_kwargs):
+        print("     Moving text encoder to CUDA (non-quantized model).")
         text_encoder.to("cuda")
-    
+
     step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
     print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
     
@@ -396,9 +404,10 @@ def load_models(model_type, use_uncensored_llm=False):
     if is_nf4:
         print("     Attempting CPU offload for NF4...");
         if hasattr(pipe, "enable_sequential_cpu_offload"):
-            try: pipe.enable_sequential_cpu_offload(); print("     ✅ CPU offload enabled.")
-            except Exception as e: print(f"     ⚠️ Failed CPU offload: {e}")
-        else: print("     ⚠️ enable_sequential_cpu_offload() not found.")
+            if quantized_llama:
+                print("Skipping enable_sequential_cpu_offload: quantized Llama models do NOT support offloading.")
+            else:
+                pipe.enable_sequential_cpu_offload()
     final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
     return pipe, MODEL_CONFIGS[model_type]
     
@@ -699,11 +708,19 @@ class HiDreamSampler:
         # --- Run Inference ---
         output_images = None
         try:
-            if not is_nf4_current:
-                print(f"Ensuring pipe on: {inference_device} (Offload NOT enabled)")
-                pipe.to(inference_device)
+            from transformers import LlamaForCausalLM
+            quantized_llama = (
+                hasattr(pipe, "text_encoder_4")
+                and isinstance(pipe.text_encoder_4, LlamaForCausalLM)
+                and getattr(pipe.text_encoder_4, "is_loaded_in_4bit", False)
+            ) or (hasattr(pipe.text_encoder_4, "quantization_config"))
+            
+            if quantized_llama:
+                print(f"Skipping pipe.to({inference_device}) for quantized Llama (already on device, cannot move).")
+                # Optionally, move VAE and transformer separately here if needed
             else:
-                print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
+                print(f"Ensuring pipe on: {inference_device}")
+                pipe.to(inference_device)
             print("Executing pipeline inference...")
             # Call pipeline with individual sequence lengths
             with torch.inference_mode():

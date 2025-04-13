@@ -240,18 +240,23 @@ def load_models(model_type, use_uncensored_llm=False):
     if not hidream_classes_loaded: raise ImportError("Cannot load models: HiDream classes failed to import.")
     if model_type not in MODEL_CONFIGS: raise ValueError(f"Unknown or incompatible model_type: {model_type}")
     config = MODEL_CONFIGS[model_type]
-    model_path = config["path"]; is_nf4 = config.get("is_nf4", False)
-    scheduler_name = config["scheduler_class"]; shift = config["shift"]
-    requires_bnb = config.get("requires_bnb", False); requires_gptq_deps = config.get("requires_gptq_deps", False)
-    if requires_bnb and not bnb_available: raise ImportError(f"Model '{model_type}' requires BitsAndBytes...")
-    if requires_gptq_deps and not gptq_support_available: raise ImportError(f"Model '{model_type}' requires GPTQ support...")
-    print(f"--- Loading Model Type: {model_type} ---"); print(f"Model Path: {model_path}")
+    model_path = config["path"];
+    is_nf4 = config.get("is_nf4", False)
+    scheduler_name = config["scheduler_class"];
+    shift = config["shift"]
+    requires_bnb = config.get("requires_bnb", False)
+    requires_gptq_deps = config.get("requires_gptq_deps", False)
+    if requires_bnb and not bnb_available:
+        raise ImportError(f"Model '{model_type}' requires BitsAndBytes...")
+    if requires_gptq_deps and (not optimum_available or not autogptq_available):
+        raise ImportError(f"Model '{model_type}' requires Optimum & AutoGPTQ...")
+    print(f"--- Loading Model Type: {model_type} ---")
+    print(f"Model Path: {model_path}")
     print(f"NF4: {is_nf4}, Requires BNB: {requires_bnb}, Requires GPTQ deps: {requires_gptq_deps}")
     print(f"Using Uncensored LLM: {use_uncensored_llm}")
-    start_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"(Start VRAM: {start_mem:.2f} MB)")
-    # Create a standardized cache key used by all nodes
+    start_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
+    print(f"(Start VRAM: {start_mem:.2f} MB)")
     cache_key = f"{model_type}_{'uncensored' if use_uncensored_llm else 'standard'}"
-    # Check cache with debug info
     if DEBUG_CACHE:
         print(f"Cache check for key: {cache_key}")
         print(f"Cache contains: {list(HiDreamSampler._model_cache.keys())}")
@@ -259,53 +264,67 @@ def load_models(model_type, use_uncensored_llm=False):
         pipe, stored_config = HiDreamSampler._model_cache[cache_key]
         if pipe is not None and hasattr(pipe, 'transformer') and pipe.transformer is not None:
             print(f"Using cached model for {cache_key}")
-            return pipe, MODEL_CONFIGS[model_type]  # Always return original config dict
+            return pipe, MODEL_CONFIGS[model_type]
         else:
             print(f"Cache entry invalid for {cache_key}, reloading")
-            # Remove from cache to avoid reusing
             HiDreamSampler._model_cache.pop(cache_key, None)
     # --- 1. Load LLM (Conditional) ---
-    text_encoder_load_kwargs = {
-        "output_hidden_states": True,
-        "low_cpu_mem_usage": True,
-        "torch_dtype": model_dtype
-    }
+    text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}
+    uncensored_model = False
     if is_nf4:
+        # Uncensored path only for this special one (do not support "partly offload/unload")
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_NF4_LLAMA_MODEL_NAME
+            uncensored_model = True
+            print(f"\n[1a] Preparing Uncensored LLM (GPTQ): {llama_model_name}")
         else:
             llama_model_name = NF4_LLAMA_MODEL_NAME
-        print(f"\n[1a] Preparing LLM: {llama_model_name}")
+            print(f"\n[1a] Preparing LLM (GPTQ): {llama_model_name}")
+        # Put the LLM *mostly* on CPU, device_map="auto", but let accelerate manage swaps
+        if accelerate_available:
+            # Optional: restrict GPU use for LLM (for OOM safety)
+            text_encoder_load_kwargs["device_map"] = "auto"
+            if hasattr(torch.cuda, 'get_device_properties') and torch.cuda.is_available():
+                total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                max_mem = int(total_mem * 0.4)
+                text_encoder_load_kwargs["max_memory"] = {0: f"{max_mem}GiB"}
+                print(f"     Setting max memory limit: {max_mem}GiB of {total_mem:.1f}GiB")
+            print("     Using device_map = 'auto'")
+        else:
+            print("     accelerate not found, attempting manual placement.")
     else:
         if use_uncensored_llm:
             llama_model_name = UNCENSORED_LLAMA_MODEL_NAME
+            uncensored_model = True
+            print(f"\n[1a] Preparing Uncensored LLM (4-bit BNB): {llama_model_name}")
         else:
             llama_model_name = ORIGINAL_LLAMA_MODEL_NAME
-        print(f"\n[1a] Preparing LLM (4-bit BNB): {llama_model_name}")
+            print(f"\n[1a] Preparing LLM (4-bit BNB): {llama_model_name}")
         if bnb_llm_config:
             text_encoder_load_kwargs["quantization_config"] = bnb_llm_config
             print("     Using 4-bit BNB.")
-        else:
-            raise ImportError("BNB config required for standard LLM.")
-        if flash_attn_available:
-            text_encoder_load_kwargs["attn_implementation"] = "flash_attention_2"
-            print("     Using Flash Attention 2.")
-        elif sdpa_available:
-            text_encoder_load_kwargs["attn_implementation"] = "sdpa"
-            print("     Using PyTorch SDPA attention.")
-        else:
-            text_encoder_load_kwargs["attn_implementation"] = "eager"
-            print("     Using standard eager attention.")
-    # --- ALWAYS add device_map='auto' for quantized
-    if is_nf4 or bnb_llm_config is not None:
-        text_encoder_load_kwargs["device_map"] = "auto"
-        print("     Using device_map='auto' for quantized model.")
-    print(f"[1b] Loading Tokenizer: {llama_model_name}...")
-    tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False)
-    print("     Tokenizer loaded.")
+        else: raise ImportError("BNB config required for standard LLM.")
+        if flash_attn_available: text_encoder_load_kwargs["attn_implementation"] = "flash_attention_2"; print("     Using Flash Attention 2.")
+        elif sdpa_available: text_encoder_load_kwargs["attn_implementation"] = "sdpa"; print("     Using PyTorch SDPA attention.")
+        else: text_encoder_load_kwargs["attn_implementation"] = "eager"; print("     Using standard eager attention.")
+        # For uncensored bnb you must never offload or .to(). See below.
+
+    print(f"[1b] Loading Tokenizer: {llama_model_name}..."); tokenizer = AutoTokenizer.from_pretrained(llama_model_name, use_fast=False); print("     Tokenizer loaded.")
+    # RoPE scaling patch for nf4 if needed...
+    if is_nf4:
+        try:
+            from transformers import AutoConfig
+            config_ = AutoConfig.from_pretrained(llama_model_name)
+            config_.rope_scaling = {"type": "linear", "factor": 1.0}
+            print(f"     ✅ Fixed rope_scaling to: {config_.rope_scaling}")
+            text_encoder_load_kwargs["config"] = config_
+            text_encoder_load_kwargs["low_cpu_mem_usage"] = True
+        except Exception as e:
+            print(f"     ⚠️ Failed to patch config: {e}")
     print(f"[1c] Loading Text Encoder: {llama_model_name}... (May download files)")
     text_encoder = LlamaForCausalLM.from_pretrained(llama_model_name, **text_encoder_load_kwargs)
 
+    # -- Define quantized/uncensored gates for later logic --
     def is_quantized_llama(model):
         return (
             hasattr(model, "is_loaded_in_4bit") and model.is_loaded_in_4bit
@@ -314,12 +333,11 @@ def load_models(model_type, use_uncensored_llm=False):
         )
     quantized_llama = is_quantized_llama(text_encoder)
 
-    # -- Uncensored hook disables (unchanged) --
-    if use_uncensored_llm:
+    # Uncensored model: forcibly block hooks, never move/CPU-offload
+    if uncensored_model:
         print("     Uncensored model detected - disabling hooks and quantization")
         if hasattr(text_encoder, "_hf_hook"):
-            print("     Removing _hf_hook")
-            text_encoder._hf_hook = None
+            print("     Removing _hf_hook"); text_encoder._hf_hook = None
         for module in text_encoder.modules():
             if hasattr(module, "_hf_hook"): module._hf_hook = None
             if hasattr(module, "_forward_pre_hooks"):
@@ -329,8 +347,7 @@ def load_models(model_type, use_uncensored_llm=False):
                         hooks_to_remove.append(hook_id)
                 for hook_id in hooks_to_remove:
                     module._forward_pre_hooks.pop(hook_id, None)
-                if hooks_to_remove:
-                    print(f"     Removed {len(hooks_to_remove)} pre_forward hooks")
+                if hooks_to_remove: print(f"     Removed {len(hooks_to_remove)} pre_forward hooks")
         try:
             for name, module in text_encoder.named_modules():
                 if 'Linear' in module.__class__.__name__ and hasattr(module, 'weight'):
@@ -340,37 +357,36 @@ def load_models(model_type, use_uncensored_llm=False):
         except Exception as e:
             print(f"     Warning: Error while checking for uint8 weights: {e}")
 
-    # Only move text_encoder if NOT quantized or device_map
-    if not quantized_llama and "device_map" not in text_encoder_load_kwargs:
+    # For quantized Llama (BNB, uncensored, etc): DO NOT .to(), DO NOT offload!
+    if uncensored_model or (quantized_llama and not is_nf4):
+        print("     Quantized Llama or uncensored == do not move or offload after load.")
+    elif is_nf4:
+        print("     NF4 LLM will be offloaded to CPU when not in use via CPU offload if supported.")
+    else:
         print("     Moving text encoder to CUDA (non-quantized model).")
-        text_encoder.to("cuda")
-    step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
-    print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
+        try:
+            text_encoder.to("cuda")
+        except Exception as e:
+            print(f"     Warning: Could not move LLM to CUDA: {e}")
+    step1_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Text encoder loaded! (VRAM: {step1_mem:.2f} MB)")
 
     # --- 2. Load Transformer (Conditional) ---
-    print(f"\n[2] Preparing Transformer from: {model_path}")
-    transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
+    print(f"\n[2] Preparing Transformer from: {model_path}"); transformer_load_kwargs = {"subfolder": "transformer", "torch_dtype": model_dtype, "low_cpu_mem_usage": True}
     if is_nf4: print("     Type: NF4")
     else:
         print("     Type: Standard (Applying 4-bit BNB quantization)")
         if bnb_transformer_4bit_config:
             transformer_load_kwargs["quantization_config"] = bnb_transformer_4bit_config
-        else:
-            raise ImportError("BNB config required for transformer but unavailable.")
-    print("     Loading Transformer... (May download files)")
-    transformer = HiDreamImageTransformer2DModel.from_pretrained(model_path, **transformer_load_kwargs)
-    print("     Moving Transformer to CUDA...")
-    transformer.to("cuda")
+        else: raise ImportError("BNB config required for transformer but unavailable.")
+    print("     Loading Transformer... (May download files)"); transformer = HiDreamImageTransformer2DModel.from_pretrained(model_path, **transformer_load_kwargs)
+    print("     Moving Transformer to CUDA..."); transformer.to("cuda")
     step2_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Transformer loaded! (VRAM: {step2_mem:.2f} MB)")
 
     # --- 3. Load Scheduler ---
-    print(f"\n[3] Preparing Scheduler: {scheduler_name}")
-    scheduler = get_scheduler_instance(scheduler_name, shift)
-    print(f"     Using Scheduler: {scheduler_name}")
+    print(f"\n[3] Preparing Scheduler: {scheduler_name}"); scheduler = get_scheduler_instance(scheduler_name, shift); print(f"     Using Scheduler: {scheduler_name}")
 
     # --- 4. Load Pipeline ---
-    print(f"\n[4] Loading Pipeline from: {model_path}")
-    print("     Passing pre-loaded components...")
+    print(f"\n[4] Loading Pipeline from: {model_path}"); print("     Passing pre-loaded components...")
     pipe = HiDreamImagePipeline.from_pretrained(
         model_path,
         scheduler=scheduler,
@@ -386,30 +402,29 @@ def load_models(model_type, use_uncensored_llm=False):
     print("\n[5] Finalizing Pipeline..."); print("     Assigning transformer..."); pipe.transformer = transformer
 
     print("     Moving pipeline object to CUDA (final check)...")
-    if quantized_llama:
-        print("     Skipping .to('cuda') for quantized Llama models (already on correct device).")
+    # Don't .to() or offload for uncensored or bnb 4bit, ONLY for regular nf4 (autogptq) allow offload.
+    if uncensored_model or (quantized_llama and not is_nf4):
+        print("     Skipping .to('cuda') for quantized/uncensored Llama models.")
     else:
-        try:
-            pipe.to("cuda")
-        except Exception as e:
-            print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
+        try: pipe.to("cuda")
+        except Exception as e: print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
 
-    if is_nf4:
-        print("     Attempting CPU offload for NF4...")
+    # Offload logic for LLMs:
+    if is_nf4 and not uncensored_model:
+        print("     Attempting CPU offload for NF4 (GPTQ) model...")
         if hasattr(pipe, "enable_sequential_cpu_offload"):
-            if quantized_llama:
-                print("     ⚠️ CPU offload skipped for quantized models; not supported by BNB/GPTQ.")
-            else:
-                try:
-                    pipe.enable_sequential_cpu_offload()
-                    print("     ✅ CPU offload enabled.")
-                except Exception as e:
-                    print(f"     ⚠️ Failed CPU offload: {e}")
+            try:
+                pipe.enable_sequential_cpu_offload()
+                print("     ✅ CPU offload enabled.")
+            except Exception as e:
+                print(f"     ⚠️ Failed CPU offload: {e}")
         else:
             print("     ⚠️ enable_sequential_cpu_offload() not found.")
+    else:
+        if uncensored_model or quantized_llama:
+            print("     ⚠️ Offload forbidden for uncensored/4bit Llama (will crash if tried).")
 
-    final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0
-    print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
+    final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
     return pipe, MODEL_CONFIGS[model_type]
     
 # --- Resolution Parsing & Tensor Conversion ---

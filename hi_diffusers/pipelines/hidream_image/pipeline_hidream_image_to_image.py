@@ -129,7 +129,7 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
                 print("[HiDreamImagePipeline] Unloading text_encoder_4 (LLM) from memory/GPU after embedding.")
                 # Use to_empty if available for robust unloading (esp. GPTQ/BnB models)
                 if hasattr(self.text_encoder_4, "to_empty"):
-                    self.text_encoder_4.to_empty()
+                    self.text_encoder_4.to_empty(device="meta")
                 else:
                     self.text_encoder_4.to("meta")
                 del self.text_encoder_4

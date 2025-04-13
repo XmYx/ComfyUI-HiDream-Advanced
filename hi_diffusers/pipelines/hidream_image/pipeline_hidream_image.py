@@ -36,6 +36,8 @@ else:
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
+DEBUG = False # Set to True to enable debug / troubleshooting output
+
 # Copied from diffusers.pipelines.flux.pipeline_flux.calculate_shift
 def calculate_shift(
     image_seq_len,
@@ -243,7 +245,8 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         batch_size = len(prompt)
         
         # Debug info
-        print("\n=== DEBUG: _get_llama3_prompt_embeds ===")
+        if DEBUG:
+            print("\n=== DEBUG: _get_llama3_prompt_embeds ===")
         print(f"Device: {device}, Dtype: {dtype}")
         print(f"Model type: {type(self.text_encoder_4).__name__}")
         
@@ -304,7 +307,6 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         print("Trying to run model inference...")
         
         try:
-            # Using the direct approach (like the working code)
             outputs = self.text_encoder_4(
                 text_input_ids.to(device),
                 attention_mask=attention_mask.to(device),
@@ -381,7 +383,8 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         prompt_embeds = prompt_embeds.repeat(1, 1, num_images_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(-1, batch_size * num_images_per_prompt, seq_len, dim)
         
-        print("=== End DEBUG ===\n")
+        if DEBUG:
+            print("=== End DEBUG ===\n")
         return prompt_embeds
     
     def encode_prompt(
@@ -762,12 +765,15 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         )
 
         # --- UNLOAD TEXT ENCODER 4 (LLM) AFTER EMBEDS ---
-        # Frees massive VRAM/RAM for denoising
         import gc
         try:
             if hasattr(self, "text_encoder_4") and self.text_encoder_4 is not None:
                 print("[HiDreamImagePipeline] Unloading text_encoder_4 (LLM) from memory/GPU after embedding.")
-                self.text_encoder_4.to("cpu")
+                # Use to_empty if available for robust unloading (esp. GPTQ/BnB models)
+                if hasattr(self.text_encoder_4, "to_empty"):
+                    self.text_encoder_4.to_empty()
+                else:
+                    self.text_encoder_4.to("meta")
                 del self.text_encoder_4
                 self.text_encoder_4 = None
                 gc.collect()

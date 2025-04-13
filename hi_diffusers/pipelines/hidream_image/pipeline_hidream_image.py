@@ -233,7 +233,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         prompt: Union[str, List[str]] = None,
         num_images_per_prompt: int = 1,
         max_sequence_length: int = 128,
-        system_prompt: Optional[str] = "",
+        system_prompt: Optional[str] = "",  # Default to empty system prompt
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
@@ -242,10 +242,15 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         prompt = [prompt] if isinstance(prompt, str) else prompt
         batch_size = len(prompt)
         
-        # Format prompts with system message
+        # Format prompts with system message - only if system_prompt is provided
         formatted_prompts = []
         for p in prompt:
-            formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
+            if system_prompt:
+                # Use the proper chat template format for Llama 3
+                formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
+            else:
+                # Skip system prompt if empty
+                formatted_prompt = f"<|user|>\n{p}\n<|assistant|>"
             formatted_prompts.append(formatted_prompt)
         
         text_inputs = self.tokenizer_4(
@@ -257,13 +262,16 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
             return_tensors="pt",
         )
         
-        # Temporarily disable any BnB hooks that might interfere with inference
+        text_input_ids = text_inputs.input_ids
+        attention_mask = text_inputs.attention_mask
+        
+        # Temporarily disable BnB hooks that might interfere with inference
         old_forward_hooks = {}
         
         try:
-            # Try to temporarily disable BitsAndBytes hooks
+            # Try to temporarily disable BitsAndBytes hooks that could cause errors 
             if hasattr(self.text_encoder_4, "model"):
-                # Check for the specific hook that's causing issues
+                # Check for the hook that's causing "Blockwise quantization" issues
                 for name, module in self.text_encoder_4.model.named_modules():
                     if hasattr(module, "_forward_pre_hooks"):
                         for hook_id, hook in list(module._forward_pre_hooks.items()):
@@ -274,32 +282,43 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
                                 old_forward_hooks[name].append((hook_id, hook))
                                 module._forward_pre_hooks.pop(hook_id)
             
-            # Standard inference path - simple and direct
+            # Standard inference path
             outputs = self.text_encoder_4(
-                text_inputs.input_ids.to(device),
-                attention_mask=text_inputs.attention_mask.to(device),
-                output_hidden_states=True
+                text_input_ids.to(device),
+                attention_mask=attention_mask.to(device),
+                output_hidden_states=True,
+                output_attentions=True
             )
             
             prompt_embeds = outputs.hidden_states[1:]
             prompt_embeds = torch.stack(prompt_embeds, dim=0)
         
+        except Exception as e:
+            logger.warning(f"Error in LLM processing: {e}")
+            # Re-raise to propagate the error
+            raise
+            
         finally:
             # Restore any hooks we removed
             if old_forward_hooks:
                 for name, hooks in old_forward_hooks.items():
-                    # Navigate to the module
-                    parts = name.split(".")
-                    module = self.text_encoder_4.model
-                    for part in parts:
-                        module = getattr(module, part)
-                    
-                    # Restore hooks
-                    for hook_id, hook in hooks:
-                        module._forward_pre_hooks[hook_id] = hook
+                    try:
+                        # Navigate to the module
+                        parts = name.split(".")
+                        module = self.text_encoder_4.model
+                        for part in parts:
+                            module = getattr(module, part)
+                        
+                        # Restore hooks
+                        for hook_id, hook in hooks:
+                            module._forward_pre_hooks[hook_id] = hook
+                    except Exception as e:
+                        logger.warning(f"Error restoring hooks: {e}")
         
-        # Standard shape transformations
+        # Continue with standard shape transformations  
         _, _, seq_len, dim = prompt_embeds.shape
+        
+        # Duplicate text embeddings for each generation per prompt
         prompt_embeds = prompt_embeds.repeat(1, 1, num_images_per_prompt, 1)
         prompt_embeds = prompt_embeds.view(-1, batch_size * num_images_per_prompt, seq_len, dim)
         

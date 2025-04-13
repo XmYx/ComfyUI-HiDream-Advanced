@@ -404,7 +404,6 @@ def load_models(model_type, use_alternate_llm=False):
         scheduler=scheduler,
         tokenizer_4=tokenizer,
         text_encoder_4=text_encoder,
-        transformer=None,
         torch_dtype=model_dtype,
         low_cpu_mem_usage=True
     )

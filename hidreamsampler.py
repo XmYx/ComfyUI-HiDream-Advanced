@@ -65,16 +65,27 @@ try:
     print("GPTQModel support is available")
 except ImportError:
     gptqmodel_available = False
-    # Try the older auto-gptq as fallback
+    # Check for GPTQ support - try both modern and legacy approaches
     try:
-        import auto_gptq
-        autogptq_available = True
-        print("AutoGPTQ (legacy) support is available")
+        from transformers import GPTQConfig
+        gptqmodel_available = True
+        print("GPTQModel support is available (recommended)")
     except ImportError:
+        gptqmodel_available = False
+        # Try the older auto-gptq as fallback
+        try:
+            import auto_gptq
+            autogptq_available = True
+            print("AutoGPTQ (legacy) support is available")
+        except ImportError:
+            autogptq_available = False
+            print("No GPTQ support available (GPTQModel or AutoGPTQ)")
+    
+    # Combined flag for any GPTQ support
+    gptq_support_available = gptqmodel_available if 'gptqmodel_available' in locals() else False
+    if not 'autogptq_available' in locals():
         autogptq_available = False
-        print("Neither GPTQModel nor AutoGPTQ available")
-    # Note: Optimum might still load GPTQ without auto-gptq if using ExLlama kernels,
-    # but it's often required. Add a warning if NF4 models are selected later.
+    gptq_support_available = gptq_support_available or autogptq_available
 try:
     import optimum
     optimum_available = True
@@ -170,7 +181,7 @@ MODEL_CONFIGS = {
 # (Keep filtering logic the same)
 original_model_count = len(MODEL_CONFIGS)
 if not bnb_available: MODEL_CONFIGS = {k: v for k, v in MODEL_CONFIGS.items() if not v.get("requires_bnb", False)}
-if not optimum_available or not autogptq_available: MODEL_CONFIGS = {k: v for k, v in MODEL_CONFIGS.items() if not v.get("requires_gptq_deps", False)}
+if not optimum_available or not gptq_support_available: MODEL_CONFIGS = {k: v for k, v in MODEL_CONFIGS.items() if not v.get("requires_gptq_deps", False)}
 if not hidream_classes_loaded: MODEL_CONFIGS = {}
 filtered_model_count = len(MODEL_CONFIGS)
 if filtered_model_count == 0: print("*"*70 + "\nCRITICAL ERROR: No HiDream models available...\n" + "*"*70)

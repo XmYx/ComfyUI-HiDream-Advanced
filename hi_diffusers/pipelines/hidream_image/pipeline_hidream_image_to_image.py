@@ -123,12 +123,15 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
         )
 
         # --- UNLOAD TEXT ENCODER 4 (LLM) AFTER EMBEDS ---
-        # Frees massive VRAM/RAM for denoising
         import gc
         try:
             if hasattr(self, "text_encoder_4") and self.text_encoder_4 is not None:
                 print("[HiDreamImagePipeline] Unloading text_encoder_4 (LLM) from memory/GPU after embedding.")
-                self.text_encoder_4.to("cpu")
+                # Use to_empty if available for robust unloading (esp. GPTQ/BnB models)
+                if hasattr(self.text_encoder_4, "to_empty"):
+                    self.text_encoder_4.to_empty()
+                else:
+                    self.text_encoder_4.to("meta")
                 del self.text_encoder_4
                 self.text_encoder_4 = None
                 gc.collect()

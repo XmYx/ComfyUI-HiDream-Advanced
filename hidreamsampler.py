@@ -74,15 +74,18 @@ except ImportError:
     gptqmodel_available = False
     print("GPTQModel not available")
     
-    # Try legacy auto-gptq as fallback
-    try:
-        import auto_gptq
-        autogptq_available = True
-        gptq_support_available = True
-        print("AutoGPTQ (legacy) support is available")
-    except ImportError:
-        autogptq_available = False
-        print("No GPTQ support available")
+# Always try auto-gptq as fallback
+try:
+    import auto_gptq
+    autogptq_available = True
+    gptq_support_available = True  # This is the key - set support available if either method works
+    print("AutoGPTQ support is available")
+except ImportError:
+    autogptq_available = False
+    print("AutoGPTQ not available")
+
+# Add a debug print to verify
+print(f"GPTQ Support: {gptq_support_available} (GPTQModel: {gptqmodel_available}, AutoGPTQ: {autogptq_available})")
 try:
     import optimum
     optimum_available = True
@@ -178,7 +181,11 @@ MODEL_CONFIGS = {
 # (Keep filtering logic the same)
 original_model_count = len(MODEL_CONFIGS)
 if not bnb_available: MODEL_CONFIGS = {k: v for k, v in MODEL_CONFIGS.items() if not v.get("requires_bnb", False)}
-if not optimum_available or not gptq_support_available: MODEL_CONFIGS = {k: v for k, v in MODEL_CONFIGS.items() if not v.get("requires_gptq_deps", False)}
+if not optimum_available or not gptq_support_available: 
+    print(f"Warning: GPTQ support missing (optimum: {optimum_available}, GPTQ: {gptq_support_available})")
+    MODEL_CONFIGS = {k: v for k, v in MODEL_CONFIGS.items() if not v.get("requires_gptq_deps", False)}
+else:
+    print("GPTQ dependencies available - all models should work")
 if not hidream_classes_loaded: MODEL_CONFIGS = {}
 filtered_model_count = len(MODEL_CONFIGS)
 if filtered_model_count == 0: print("*"*70 + "\nCRITICAL ERROR: No HiDream models available...\n" + "*"*70)
@@ -237,7 +244,7 @@ def load_models(model_type, use_uncensored_llm=False):
     scheduler_name = config["scheduler_class"]; shift = config["shift"]
     requires_bnb = config.get("requires_bnb", False); requires_gptq_deps = config.get("requires_gptq_deps", False)
     if requires_bnb and not bnb_available: raise ImportError(f"Model '{model_type}' requires BitsAndBytes...")
-    if requires_gptq_deps and (not optimum_available or not autogptq_available): raise ImportError(f"Model '{model_type}' requires Optimum & AutoGPTQ...")
+    if requires_gptq_deps and not gptq_support_available: raise ImportError(f"Model '{model_type}' requires GPTQ support...")
     print(f"--- Loading Model Type: {model_type} ---"); print(f"Model Path: {model_path}")
     print(f"NF4: {is_nf4}, Requires BNB: {requires_bnb}, Requires GPTQ deps: {requires_gptq_deps}")
     print(f"Using Uncensored LLM: {use_uncensored_llm}")

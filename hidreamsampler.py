@@ -398,16 +398,28 @@ def load_models(model_type, use_uncensored_llm=False):
     
     # --- 5. Final Setup ---
     print("\n[5] Finalizing Pipeline..."); print("     Assigning transformer..."); pipe.transformer = transformer
-    print("     Moving pipeline object to CUDA (final check)...");
-    try: pipe.to("cuda")
-    except Exception as e: print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
+    print("     Moving pipeline object to CUDA (final check)...")
+    if quantized_llama:
+        print("     Skipping .to('cuda') for quantized Llama models (already on correct device).")
+    else:
+        try:
+            pipe.to("cuda")
+        except Exception as e:
+            print(f"     Warning: Could not move pipeline object to CUDA: {e}.")
+    
     if is_nf4:
-        print("     Attempting CPU offload for NF4...");
+        print("     Attempting CPU offload for NF4...")
         if hasattr(pipe, "enable_sequential_cpu_offload"):
             if quantized_llama:
-                print("Skipping enable_sequential_cpu_offload: quantized Llama models do NOT support offloading.")
+                print("     ⚠️ CPU offload skipped for quantized models; not supported by BNB/GPTQ.")
             else:
-                pipe.enable_sequential_cpu_offload()
+                try:
+                    pipe.enable_sequential_cpu_offload()
+                    print("     ✅ CPU offload enabled.")
+                except Exception as e:
+                    print(f"     ⚠️ Failed CPU offload: {e}")
+        else:
+            print("     ⚠️ enable_sequential_cpu_offload() not found.")
     final_mem = torch.cuda.memory_allocated() / 1024**2 if torch.cuda.is_available() else 0; print(f"✅ Pipeline ready! (VRAM: {final_mem:.2f} MB)")
     return pipe, MODEL_CONFIGS[model_type]
     
@@ -709,6 +721,18 @@ class HiDreamSampler:
         output_images = None
         try:
             from transformers import LlamaForCausalLM
+            def is_quantized_llama(model):
+                # For HF/BnB/Optimum GPTQ etc.
+                return (
+                    hasattr(model, "is_loaded_in_4bit") and model.is_loaded_in_4bit
+                ) or hasattr(model, "quantization_config") or (
+                    hasattr(model.config, "quantization_config") and model.config.quantization_config is not None
+                )
+            
+            # Define quantized_llama before usage!!
+            quantized_llama = (
+                "text_encoder_4" in pipe.__dict__ and isinstance(pipe.text_encoder_4, LlamaForCausalLM) and is_quantized_llama(pipe.text_encoder_4)
+            ) or is_quantized_llama(text_encoder)
             quantized_llama = (
                 hasattr(pipe, "text_encoder_4")
                 and isinstance(pipe.text_encoder_4, LlamaForCausalLM)

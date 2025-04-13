@@ -121,23 +121,6 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
             llama_scale=llama_scale,
             lora_scale=lora_scale,
         )
-
-        # --- UNLOAD TEXT ENCODER 4 (LLM) AFTER EMBEDS ---
-        import gc
-        try:
-            if hasattr(self, "text_encoder_4") and self.text_encoder_4 is not None:
-                print("[HiDreamImagePipeline] Unloading text_encoder_4 (LLM) from memory/GPU after embedding.")
-                # Use to_empty if available for robust unloading (esp. GPTQ/BnB models)
-                if hasattr(self.text_encoder_4, "to_empty"):
-                    self.text_encoder_4.to_empty(device="meta")
-                else:
-                    self.text_encoder_4.to("meta")
-                gc.collect()
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-        except Exception as e:
-            print(f"[HiDreamImagePipeline] Could not fully unload LLM: {e}")
-        # --- CONTINUE TO LATENT PREP/DENOISING ---
         
         if self.do_classifier_free_guidance:
             prompt_embeds_arr = []

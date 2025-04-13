@@ -1053,21 +1053,20 @@ class HiDreamSamplerAdvanced:
             inference_device = comfy.model_management.get_torch_device()
         except Exception:
             inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            
         print(f"Creating Generator on: {inference_device}")
         generator = torch.Generator(device=inference_device).manual_seed(seed)
         print(f"\n--- Starting Generation ---")
         print(f"Model: {model_type}{' (uncensored)' if use_uncensored_llm else ''}, Res: {height}x{width}, Steps: {num_inference_steps}, CFG: {guidance_scale}, Seed: {seed}")
-        print(f"Sequence lengths - CLIP-L: {max_length_clip_l}, OpenCLIP: {max_length_openclip}, T5: {max_length_t5}, Llama: {max_length_llama}")
-        
+        print(f"Using standard sequence lengths: CLIP-L: {max_length_clip_l}, OpenCLIP: {max_length_openclip}, T5: {max_length_t5}, Llama: {max_length_llama}")
         # --- Run Inference ---
         output_images = None
         try:
-            if not is_nf4_current:
-                print(f"Ensuring pipe on: {inference_device} (Offload NOT enabled)")
-                pipe.to(inference_device)
+            # If pipeline was enabled with offload, never move it!
+            if hasattr(pipe, "_is_sequential_cpu_offload") and pipe._is_sequential_cpu_offload:
+                print("Pipeline offload is enabled; skipping .to()")
             else:
-                print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
+                print(f"Ensuring pipe on: {inference_device}")
+                pipe.to(inference_device)
                 
             print("Executing pipeline inference...")
             # Make width and height divisible by 64
@@ -1494,23 +1493,20 @@ class HiDreamImg2Img:
             inference_device = comfy.model_management.get_torch_device()
         except Exception:
             inference_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            
         print(f"Creating Generator on: {inference_device}")
         generator = torch.Generator(device=inference_device).manual_seed(seed)
         print(f"\n--- Starting Generation ---")
         print(f"Model: {model_type}{' (uncensored)' if use_uncensored_llm else ''}, Res: {height}x{width}, Steps: {num_inference_steps}, CFG: {guidance_scale}, Seed: {seed}")
         print(f"Using standard sequence lengths: CLIP-L: {max_length_clip_l}, OpenCLIP: {max_length_openclip}, T5: {max_length_t5}, Llama: {max_length_llama}")
-        
         # --- Run Inference ---
         output_images = None
         try:
-            # Only move non-NF4 (non-offloading) models to device
-            if not (hasattr(pipe, '_is_sequential_cpu_offload') and pipe._is_sequential_cpu_offload):
+            # If pipeline was enabled with offload, never move it!
+            if hasattr(pipe, "_is_sequential_cpu_offload") and pipe._is_sequential_cpu_offload:
+                print("Pipeline offload is enabled; skipping .to()")
+            else:
                 print(f"Ensuring pipe on: {inference_device}")
                 pipe.to(inference_device)
-            else:
-                print("Pipeline offload is enabled; skipping .to()")
-            print("Executing pipeline inference...")
             # Call pipeline with individual sequence lengths
             with torch.inference_mode():
                 output_images = pipe(

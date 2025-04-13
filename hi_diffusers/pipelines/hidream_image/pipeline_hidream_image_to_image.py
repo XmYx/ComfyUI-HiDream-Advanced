@@ -48,7 +48,7 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
         max_sequence_length_openclip: Optional[int] = None,
         max_sequence_length_t5: Optional[int] = None,
         max_sequence_length_llama: Optional[int] = None,
-        llm_system_prompt: str = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        llm_system_prompt: str = "",
         clip_l_scale: float = 1.0,
         openclip_scale: float = 1.0,
         t5_scale: float = 1.0,
@@ -121,6 +121,22 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
             llama_scale=llama_scale,
             lora_scale=lora_scale,
         )
+
+        # --- UNLOAD TEXT ENCODER 4 (LLM) AFTER EMBEDS ---
+        # Frees massive VRAM/RAM for denoising
+        import gc
+        try:
+            if hasattr(self, "text_encoder_4") and self.text_encoder_4 is not None:
+                print("[HiDreamImagePipeline] Unloading text_encoder_4 (LLM) from memory/GPU after embedding.")
+                self.text_encoder_4.to("cpu")
+                del self.text_encoder_4
+                self.text_encoder_4 = None
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+        except Exception as e:
+            print(f"[HiDreamImagePipeline] Could not fully unload LLM: {e}")
+        # --- CONTINUE TO LATENT PREP/DENOISING ---
         
         if self.do_classifier_free_guidance:
             prompt_embeds_arr = []

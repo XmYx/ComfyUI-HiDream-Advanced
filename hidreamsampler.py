@@ -59,33 +59,30 @@ try:
 except ImportError:
     accelerate_available = False
     print("Warning: accelerate not installed. device_map='auto' for GPTQ models will not be available.")
+# Initialize GPTQ support flags
+gptqmodel_available = False
+autogptq_available = False
+gptq_support_available = False
+
+# Try modern GPTQConfig first
 try:
     from transformers import GPTQConfig
     gptqmodel_available = True
-    print("GPTQModel support is available")
+    gptq_support_available = True
+    print("GPTQModel support is available (recommended)")
 except ImportError:
     gptqmodel_available = False
-    # Check for GPTQ support - try both modern and legacy approaches
-    try:
-        from transformers import GPTQConfig
-        gptqmodel_available = True
-        print("GPTQModel support is available (recommended)")
-    except ImportError:
-        gptqmodel_available = False
-        # Try the older auto-gptq as fallback
-        try:
-            import auto_gptq
-            autogptq_available = True
-            print("AutoGPTQ (legacy) support is available")
-        except ImportError:
-            autogptq_available = False
-            print("No GPTQ support available (GPTQModel or AutoGPTQ)")
+    print("GPTQModel not available")
     
-    # Combined flag for any GPTQ support
-    gptq_support_available = gptqmodel_available if 'gptqmodel_available' in locals() else False
-    if not 'autogptq_available' in locals():
+    # Try legacy auto-gptq as fallback
+    try:
+        import auto_gptq
+        autogptq_available = True
+        gptq_support_available = True
+        print("AutoGPTQ (legacy) support is available")
+    except ImportError:
         autogptq_available = False
-    gptq_support_available = gptq_support_available or autogptq_available
+        print("No GPTQ support available")
 try:
     import optimum
     optimum_available = True

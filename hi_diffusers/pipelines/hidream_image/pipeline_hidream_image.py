@@ -231,161 +231,65 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         return prompt_embeds
     
     def _get_llama3_prompt_embeds(
-        self,
-        prompt: Union[str, List[str]] = None,
-        num_images_per_prompt: int = 1,
-        max_sequence_length: int = 128,
-        system_prompt: Optional[str] = "",  # Empty default for blank system prompts
-        device: Optional[torch.device] = None,
-        dtype: Optional[torch.dtype] = None,
-    ):
-        device = device or self._execution_device
-        dtype = dtype or self.text_encoder_4.dtype
-        prompt = [prompt] if isinstance(prompt, str) else prompt
-        batch_size = len(prompt)
-        
-        # Debug info
-        if DEBUG:
-            print("\n=== DEBUG: _get_llama3_prompt_embeds ===")
-        print(f"Device: {device}, Dtype: {dtype}")
-        print(f"Model type: {type(self.text_encoder_4).__name__}")
-        
-        # Check for signs of GPTQ
-        has_uint8_weights = False
-        has_module_classes = set()
-        has_bnb_modules = False
-        
-        for name, module in self.text_encoder_4.named_modules():
-            if hasattr(module, 'weight') and hasattr(module.weight, 'dtype'):
-                module_class = module.__class__.__name__
-                has_module_classes.add(module_class)
-                
-                if module.weight.dtype == torch.uint8:
-                    has_uint8_weights = True
-                    print(f"Found uint8 weights in {name} ({module_class})")
-                    
-                if 'bitsandbytes' in str(module.__class__):
-                    has_bnb_modules = True
-                    print(f"Found BitsAndBytes module: {module_class}")
-                    
-        print(f"Has uint8 weights: {has_uint8_weights}")
-        print(f"Has BnB modules: {has_bnb_modules}")
-        print(f"Module classes: {list(has_module_classes)[:5]}...")
-        
-        # Check for hooks that might cause issues
-        has_hooks = False
-        for name, module in self.text_encoder_4.named_modules():
-            if hasattr(module, '_forward_pre_hooks') and module._forward_pre_hooks:
-                has_hooks = True
-                for hook_id, hook in module._forward_pre_hooks.items():
-                    if 'bitsandbytes' in str(hook) or 'quantize' in str(hook):
-                        print(f"Found problematic hook in {name}: {hook}")
-        
-        print(f"Has hooks: {has_hooks}")
-        
-        # Format prompts with system message (if provided)
-        formatted_prompts = []
-        for p in prompt:
-            if system_prompt:  # Only include system prompt if not empty
-                formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
-            else:
-                formatted_prompt = f"<|user|>\n{p}\n<|assistant|>"
-            formatted_prompts.append(formatted_prompt)
-        
-        text_inputs = self.tokenizer_4(
-            formatted_prompts,
-            padding="max_length",
-            max_length=min(max_sequence_length, self.tokenizer_4.model_max_length),
-            truncation=True,
-            add_special_tokens=True,
-            return_tensors="pt",
-        )
-        
-        text_input_ids = text_inputs.input_ids
-        attention_mask = text_inputs.attention_mask
-        
-        print("Trying to run model inference...")
-        
-        try:
-            outputs = self.text_encoder_4(
-                text_input_ids.to(device),
-                attention_mask=attention_mask.to(device),
-                output_hidden_states=True,
-                output_attentions=True
+            self,
+            prompt: Union[str, List[str]] = None,
+            num_images_per_prompt: int = 1,
+            max_sequence_length: int = 128,
+            system_prompt: Optional[str] = "",  # Empty default for blank system prompts
+            device: Optional[torch.device] = None,
+            dtype: Optional[torch.dtype] = None,
+        ):
+            device = device or self._execution_device
+            dtype = dtype or self.text_encoder_4.dtype
+            prompt = [prompt] if isinstance(prompt, str) else prompt
+            batch_size = len(prompt)
+            if DEBUG:
+                print("\n=== DEBUG: _get_llama3_prompt_embeds ===")
+                print(f"Device: {device}, Dtype: {dtype}")
+                print(f"Model type: {type(self.text_encoder_4).__name__}")
+    
+            # Format prompts with system message (if provided)
+            formatted_prompts = []
+            for p in prompt:
+                if system_prompt:
+                    formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
+                else:
+                    formatted_prompt = f"<|user|>\n{p}\n<|assistant|>"
+                formatted_prompts.append(formatted_prompt)
+    
+            text_inputs = self.tokenizer_4(
+                formatted_prompts,
+                padding="max_length",
+                max_length=min(max_sequence_length, self.tokenizer_4.model_max_length),
+                truncation=True,
+                add_special_tokens=True,
+                return_tensors="pt",
             )
-            
-            prompt_embeds = outputs.hidden_states[1:]
-            prompt_embeds = torch.stack(prompt_embeds, dim=0)
-            print("✓ Direct model inference succeeded!")
-            
-        except Exception as e:
-            print(f"✗ Direct inference failed: {e}")
-            print("Attempting hook disabling as fallback...")
-            
-            # As a fallback, try disabling hooks
-            stored_hooks = {}
-            
+            text_input_ids = text_inputs.input_ids
+            attention_mask = text_inputs.attention_mask
+            if DEBUG:
+                print("Trying to run model inference...")
             try:
-                # Find and disable BnB hooks
-                for name, module in self.text_encoder_4.named_modules():
-                    if hasattr(module, '_forward_pre_hooks'):
-                        module_hooks = {}
-                        for hook_id, hook in list(module._forward_pre_hooks.items()):
-                            if ('bitsandbytes' in str(hook) or 'quantize' in str(hook)):
-                                module_hooks[hook_id] = hook
-                                module._forward_pre_hooks.pop(hook_id)
-                        
-                        if module_hooks:
-                            stored_hooks[name] = module_hooks
-                
-                print(f"Disabled {len(stored_hooks)} hooks")
-                
-                # Try again with hooks disabled
                 outputs = self.text_encoder_4(
                     text_input_ids.to(device),
                     attention_mask=attention_mask.to(device),
                     output_hidden_states=True,
                     output_attentions=True
                 )
-                
                 prompt_embeds = outputs.hidden_states[1:]
                 prompt_embeds = torch.stack(prompt_embeds, dim=0)
-                print("✓ Inference with hooks disabled succeeded!")
-                
-            except Exception as e2:
-                print(f"✗ Hook-disabled inference also failed: {e2}")
-                raise e2  # Re-raise the error
-                
-            finally:
-                # Restore hooks
-                for name, hooks in stored_hooks.items():
-                    try:
-                        parts = name.split('.')
-                        curr_mod = self.text_encoder_4
-                        for part in parts:
-                            if hasattr(curr_mod, part):
-                                curr_mod = getattr(curr_mod, part)
-                            else:
-                                curr_mod = None
-                                break
-                        
-                        if curr_mod is not None:
-                            for hook_id, hook in hooks.items():
-                                curr_mod._forward_pre_hooks[hook_id] = hook
-                    
-                    except Exception as e:
-                        print(f"Warning: Error restoring hooks for {name}: {e}")
-        
-        # Process embedding shapes as usual
-        _, _, seq_len, dim = prompt_embeds.shape
-        
-        # Duplicate embeddings for batch processing  
-        prompt_embeds = prompt_embeds.repeat(1, 1, num_images_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(-1, batch_size * num_images_per_prompt, seq_len, dim)
-        
-        if DEBUG:
-            print("=== End DEBUG ===\n")
-        return prompt_embeds
+                if DEBUG:
+                    print("✓ Direct model inference succeeded!")
+            except Exception as e:
+                print(f"✗ Direct inference failed: {e}")
+                raise e
+    
+            _, _, seq_len, dim = prompt_embeds.shape
+            prompt_embeds = prompt_embeds.repeat(1, 1, num_images_per_prompt, 1)
+            prompt_embeds = prompt_embeds.view(-1, batch_size * num_images_per_prompt, seq_len, dim)
+            if DEBUG:
+                print("=== End DEBUG ===\n")
+            return prompt_embeds
     
     def encode_prompt(
         self,

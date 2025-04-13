@@ -720,6 +720,19 @@ class HiDreamSampler:
         print(f"Creating Generator on: {inference_device}")
         generator = torch.Generator(device=inference_device).manual_seed(seed)
         print(f"\n--- Starting Generation ---")
+
+        import gc
+        if hasattr(pipe, "text_encoder_4") and pipe.text_encoder_4 is not None:
+            try:
+                pipe.text_encoder_4.to("cpu")
+            except Exception:
+                pass
+            pipe.text_encoder_4 = None
+            if hasattr(pipe, "_modules") and "text_encoder_4" in pipe._modules:
+                del pipe._modules["text_encoder_4"]
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         print(f"Model: {model_type}{' (uncensored)' if use_uncensored_llm else ''}, Res: {height}x{width}, Steps: {num_inference_steps}, CFG: {guidance_scale}, Seed: {seed}")
         print(f"Using standard sequence lengths: CLIP-L: {max_length_clip_l}, OpenCLIP: {max_length_openclip}, T5: {max_length_t5}, Llama: {max_length_llama}")
         # --- Run Inference ---

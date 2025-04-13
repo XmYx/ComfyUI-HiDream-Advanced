@@ -233,7 +233,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         prompt: Union[str, List[str]] = None,
         num_images_per_prompt: int = 1,
         max_sequence_length: int = 128,
-        system_prompt: Optional[str] = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        system_prompt: Optional[str] = "",
         device: Optional[torch.device] = None,
         dtype: Optional[torch.dtype] = None,
     ):
@@ -245,8 +245,10 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         # Format prompts with system message - this is the key addition
         formatted_prompts = []
         for p in prompt:
-            # Use the proper chat template format for Llama 3
-            formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
+            if system_prompt:
+                formatted_prompt = f"<|system|>\n{system_prompt}\n<|user|>\n{p}\n<|assistant|>"
+            else:
+                formatted_prompt = f"<|user|>\n{p}\n<|assistant|>"
             formatted_prompts.append(formatted_prompt)
         
         text_inputs = self.tokenizer_4(
@@ -306,7 +308,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         max_sequence_length_t5: Optional[int] = None,
         max_sequence_length_llama: Optional[int] = None,
         lora_scale: Optional[float] = None,
-        llm_system_prompt: str = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        llm_system_prompt: str = "",
         clip_l_scale: float = 1.0,
         openclip_scale: float = 1.0,
         t5_scale: float = 1.0,
@@ -410,7 +412,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         max_sequence_length_openclip: Optional[int] = None,
         max_sequence_length_t5: Optional[int] = None,
         max_sequence_length_llama: Optional[int] = None,
-        llm_system_prompt: str = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        llm_system_prompt: str = "",
         clip_l_scale: float = 1.0,
         openclip_scale: float = 1.0,
         t5_scale: float = 1.0,
@@ -593,7 +595,7 @@ class HiDreamImagePipeline(DiffusionPipeline, FromSingleFileMixin):
         max_sequence_length_openclip: Optional[int] = None,
         max_sequence_length_t5: Optional[int] = None,
         max_sequence_length_llama: Optional[int] = None,
-        llm_system_prompt: str = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        llm_system_prompt: str = "",
         clip_l_scale: float = 1.0,
         openclip_scale: float = 1.0,
         t5_scale: float = 1.0,

@@ -48,7 +48,7 @@ class HiDreamImageToImagePipeline(HiDreamImagePipeline):
         max_sequence_length_openclip: Optional[int] = None,
         max_sequence_length_t5: Optional[int] = None,
         max_sequence_length_llama: Optional[int] = None,
-        llm_system_prompt: str = "You are a creative AI assistant that helps create detailed, vivid images based on user descriptions.",
+        llm_system_prompt: str = "",
         clip_l_scale: float = 1.0,
         openclip_scale: float = 1.0,
         t5_scale: float = 1.0,

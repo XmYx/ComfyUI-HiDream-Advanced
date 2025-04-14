@@ -1,4 +1,13 @@
-I've decided to break this fork off into it's own repository since I am making many library changes that could be detrimental to a larger project if pulled upstream. My thanks to https://github.com/lum3on/comfyui_HiDream-Sampler for their initial work on the project!
+## Removal of autoGPTQ as a requirement and comfy portable batch installer
+Update for 4/14/25
+
+1. Removed requirements for auto-gptq, now uses transformers.GPTQModel as primary nf4 model load method and only falls back to auto-GPTQ if primary load fails.
+2. New batch file for windows users, **install-requirements-comfy-portable.bat** that will walk comfy portable users through installing the required libraries to run HiDream.
+3. Renamed "load_uncensored_LLM" to "Load_alternate_LLM" and replaced the previous alternate LLM with **akhbar/Meta-Llama-3.1-8B-Instruct-abliterated-GPTQ**. (see my thoughts below)
+
+My thoughts on HiDream and censorship, and the reason why I've renamed the field "Load_alternate_LLM"
+![image](https://github.com/user-attachments/assets/8e8d861d-28ea-416d-a366-f39ce6d41d69)
+
 
 ## Unofficial img2img support! ##
 

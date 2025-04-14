@@ -1,14 +1,23 @@
-# Core dependencies
-transformers>=4.36.0  # Older versions have RoPE scaling errors with NF4 models - upgrade if needed: pip install --upgrade transformers>=4.36.0
-diffusers>=0.26.0
-torch>=2.0.0  # For Windows with NF4 models, PyTorch 2.1.0+ is recommended - get correct version at pytorch.org for your CUDA version
-numpy>=1.24.0
-Pillow>=10.0.0
-# For standard (BNB) models
-bitsandbytes>=0.41.0
-# For NF4 models
-optimum>=1.12.0
-accelerate>=0.25.0
-auto-gptq>=0.5.0
-# Optional for faster attention (Linux/CUDA only)
-# flash-attn>=2.3.0  # Optional: For Flash Attention 2 support
+# Required dependencies
+transformers>=4.36.0
+diffusers>=0.23.0
+torch>=2.0.0
+numpy
+Pillow
+packaging
+huggingface_hub
+safetensors
+
+# Required for NF4 models
+optimum
+accelerate
+
+# For 4-bit quantization (required for standard models)
+# bitsandbytes
+
+# For faster attention (optional but recommended)
+# flash-attn
+
+# ONLY install auto-gptq if modelGPTQ in transformers isn't working
+# WARNING: auto-gptq is NOT compatible with Python 3.12 and has issues on Windows
+# auto-gptq

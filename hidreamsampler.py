@@ -130,8 +130,8 @@ NF4_MODEL_PREFIX = "azaneko"
 ORIGINAL_LLAMA_MODEL_NAME = "nvidia/Llama-3.1-Nemotron-Nano-8B-v1" # For original/FP8
 NF4_LLAMA_MODEL_NAME = "hugging-quants/Meta-Llama-3.1-8B-Instruct-GPTQ-INT4" # For NF4
 # Add alternate model paths (using the same model as NF4 since it's less censored)
-ALTERNATE_LLAMA_MODEL_NAME = "hugging-quants/Meta-Llama-3.1-8B-Instruct-GPTQ-INT4" 
-ALTERNATE_NF4_LLAMA_MODEL_NAME = "hugging-quants/Meta-Llama-3.1-8B-Instruct-GPTQ-INT4"
+ALTERNATE_LLAMA_MODEL_NAME = "akhbar/Meta-Llama-3.1-8B-Instruct-abliterated-GPTQ" 
+ALTERNATE_NF4_LLAMA_MODEL_NAME = "akhbar/Meta-Llama-3.1-8B-Instruct-abliterated-GPTQ"
 # --- Model Configurations ---
 # Added flags for dependency checks
 MODEL_CONFIGS = {

@@ -9,14 +9,14 @@ echo This is specifically for ComfyUI-portable users.
 echo.
 
 rem Move up to the ComfyUI root directory from custom_nodes/ComfyUI-HiDream-Sampler
-cd ..\..\
+cd ..\..\..\
 
 set COMFY_ROOT=%CD%
 echo ComfyUI root directory: %COMFY_ROOT%
 
-rem Check if python_embedded exists
-if not exist "python_embedded\python.exe" (
-    echo ERROR: Could not find python_embedded\python.exe
+rem Check if python_embeded exists
+if not exist "python_embeded\python.exe" (
+    echo ERROR: Could not find python_embeded\python.exe
     echo This script is intended for ComfyUI-portable installations only.
     echo For standard installations, please use your virtual environment.
     goto :end
@@ -24,11 +24,12 @@ if not exist "python_embedded\python.exe" (
 
 echo.
 echo Installing basic dependencies...
-python_embedded\python.exe -s -m pip install -r custom_nodes\ComfyUI-HiDream-Sampler\requirements.txt
+echo %CD%
+python_embeded\python.exe -s -m pip install -r ComfyUI\custom_nodes\ComfyUI-HiDream-Sampler\requirements.txt
 
 echo.
 echo Installing NF4 model dependencies (optimum, accelerate)...
-python_embedded\python.exe -s -m pip install optimum accelerate
+python_embeded\python.exe -s -m pip install optimum accelerate
 
 echo.
 echo Would you like to install BitsAndBytes for 4-bit quantization models? (y/n)
@@ -37,7 +38,7 @@ set /p CHOICE_BNB="> "
 if /i "%CHOICE_BNB%"=="y" (
     echo.
     echo Installing BitsAndBytes...
-    python_embedded\python.exe -s -m pip install bitsandbytes
+    python_embeded\python.exe -s -m pip install bitsandbytes
 )
 
 echo.
@@ -47,7 +48,7 @@ set /p CHOICE_FLASH="> "
 if /i "%CHOICE_FLASH%"=="y" (
     echo.
     echo Installing Flash Attention...
-    python_embedded\python.exe -s -m pip install flash-attn
+    python_embeded\python.exe -s -m pip install flash-attn
 )
 
 echo.
@@ -65,7 +66,7 @@ set /p CHOICE_AUTOGPTQ="> "
 if /i "%CHOICE_AUTOGPTQ%"=="y" (
     echo.
     echo Installing auto-gptq (this may fail on some systems)...
-    python_embedded\python.exe -s -m pip install auto-gptq
+    python_embeded\python.exe -s -m pip install auto-gptq
 )
 
 echo.
